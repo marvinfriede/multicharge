@@ -24,20 +24,29 @@ program main
    implicit none
    character(len=*), parameter :: prog_name = "multicharge"
 
-   character(len=:), allocatable :: input, chargeinput
+   character(len=:), allocatable :: input
    integer, allocatable :: input_format
-   integer :: stat, unit
    type(error_type), allocatable :: error
    type(structure_type) :: mol
    type(mchrg_model_type) :: model
-   logical :: grad, exist
+   logical :: grad
    real(wp), parameter :: cn_max = 8.0_wp, cutoff = 25.0_wp
    real(wp), allocatable :: cn(:), dcndr(:, :, :), dcndL(:, :, :), rcov(:), trans(:, :)
-   real(wp), allocatable :: energy(:), gradient(:, :), sigma(:, :)
+   real(wp), allocatable :: energy(:), gradient(:, :), sigma(:, :), hessian(:, :, :, :)
    real(wp), allocatable :: qvec(:), dqdr(:, :, :), dqdL(:, :, :)
-   real(wp), allocatable :: charge
 
-   call get_arguments(input, input_format, grad, charge, error)
+   integer :: iat, ix
+   real(wp), parameter :: step = 1.0e-4_wp
+   type(structure_type) :: displ
+   real(wp), allocatable :: el(:), er(:)
+   real(wp), allocatable :: gl(:, :), gr(:, :), sl(:, :), sr(:, :)
+   real(wp), allocatable :: qvec_l(:), dqdr_l(:, :, :), dqdL_l(:, :, :)
+   real(wp), allocatable :: qvec_r(:), dqdr_r(:, :, :), dqdL_r(:, :, :)
+
+   real(wp), allocatable :: dcndr_l(:, :, :), dcndL_l(:, :, :)
+   real(wp), allocatable :: dcndr_r(:, :, :), dcndL_r(:, :, :)
+
+   call get_arguments(input, input_format, grad, error)
    if (allocated(error)) then
       write(error_unit, '(a)') error%message
       error stop
@@ -54,26 +63,7 @@ program main
       error stop
    end if
 
-   if (allocated(charge)) then
-      mol%charge = charge
-   else
-      chargeinput = ".CHRG"
-      inquire(file=chargeinput, exist=exist)
-      if (exist) then
-         open(file=chargeinput, newunit=unit)
-         allocate(charge)
-         read(unit, *, iostat=stat) charge
-         if (stat == 0) then
-            mol%charge = charge
-            write(output_unit, '(a,/)') &
-               "[Info] Molecular charge read from '"//chargeinput//"'"
-         else
-            write(output_unit, '(a,/)') &
-               "[Warn] Could not read molecular charge read from '"//chargeinput//"'"
-         end if
-         close(unit)
-      end if
-   end if
+  ! mol%charge = -1.0_wp
 
    call new_eeq2019_model(mol, model)
    call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
@@ -85,6 +75,8 @@ program main
       allocate(dcndr(3, mol%nat, mol%nat), dcndL(3, 3, mol%nat))
    end if
 
+   allocate(hessian(mol%nat, 3, mol%nat, 3))
+
    rcov = get_covalent_rad(mol%num)
    call get_coordination_number(mol, trans, cutoff, rcov, cn, dcndr, dcndL, cut=cn_max)
 
@@ -94,6 +86,10 @@ program main
       allocate(gradient(3, mol%nat), sigma(3, 3))
       gradient(:, :) = 0.0_wp
       sigma(:, :) = 0.0_wp
+
+      allocate(dqdr(3, mol%nat, mol%nat), dqdL(3, 3, mol%nat))
+      dqdr(:, :, :) = 0.0_wp
+      dqdL(:, :, :) = 0.0_wp
    end if
 
    call model%solve(mol, cn, dcndr, dcndL, energy, gradient, sigma, &
@@ -101,6 +97,90 @@ program main
 
    call write_ascii_properties(output_unit, mol, model, cn, qvec)
    call write_ascii_results(output_unit, mol, energy, gradient, sigma)
+
+   write (*, *) "energy"
+   write(*, '(SP,es23.16e2,",")') energy
+   write (*, *) ""
+
+      write (*, *) "qvec"
+   write(*, '(SP,es23.16e2,",")') qvec
+   write (*, *) ""
+
+   write (*, *) "grad"
+   write(*, '(*(6x,SP,"[",3(es23.16e2, "":, ","), "],", /))', advance='no') gradient
+   write (*, *) ",]"
+
+   write (*, *) "dqdr"
+   write(*, '(SP,es23.16e2,",")') dqdr
+   write (*, *) ""
+
+
+
+   hessian(:, :, :, :) = 0.0_wp
+   
+   allocate(dcndr_l(3, mol%nat, mol%nat), dcndL_l(3, 3, mol%nat))
+   allocate(dcndr_r(3, mol%nat, mol%nat), dcndL_r(3, 3, mol%nat))
+
+   
+   allocate(gl(3, mol%nat), gr(3, mol%nat), sl(3, 3), sr(3, 3))
+
+
+   allocate(el(mol%nat), er(mol%nat))
+
+   
+   allocate(qvec_l(mol%nat), qvec_r(mol%nat))
+
+
+
+   allocate(dqdr_l(3, mol%nat, mol%nat), dqdL_l(3, 3, mol%nat))
+   allocate(dqdr_r(3, mol%nat, mol%nat), dqdL_r(3, 3, mol%nat))
+
+   return
+
+   displ = mol
+   do iat = 1, mol%nat
+      do ix = 1, 3
+         displ%xyz(ix, iat) = mol%xyz(ix, iat) + step
+          
+          dqdr_l(:, :, :) = 0.0_wp
+          dqdr_r(:, :, :) = 0.0_wp
+          dqdL_l(:, :, :) = 0.0_wp
+          dqdL_r(:, :, :) = 0.0_wp
+           qvec_l(:) = 0.0_wp
+          qvec_r(:) = 0.0_wp
+
+          el(:) = 0.0_wp
+          er(:) = 0.0_wp
+
+              gl(:, :) = 0.0_wp
+          gr(:, :) = 0.0_wp
+          sl(:, :) = 0.0_wp
+          sr(:, :) = 0.0_wp
+          
+          dcndr_l(:, :, :) = 0.0_wp
+          dcndr_r(:, :, :) = 0.0_wp
+          dcndL_l(:, :, :) = 0.0_wp
+          dcndL_r(:, :, :) = 0.0_wp
+
+         call get_lattice_points(displ%periodic, displ%lattice, cutoff, trans)
+         call get_coordination_number(displ, trans, cutoff, rcov, cn, dcndr_l, dcndL_l, cut=cn_max)
+         call model%solve(displ, cn, dcndr_l, dcndL_l, el, gl, sl, &
+          & qvec_l, dqdr_l, dqdL_l)
+
+
+         displ%xyz(ix, iat) = mol%xyz(ix, iat) - step
+         call get_lattice_points(displ%periodic, displ%lattice, cutoff, trans)
+         call get_coordination_number(displ, trans, cutoff, rcov, cn, dcndr_r, dcndL_r, cut=cn_max)
+         call model%solve(displ, cn, dcndr_r, dcndL_r, er, gr, sr, &
+          & qvec_r, dqdr_r, dqdL_r)
+
+         displ%xyz(ix, iat) = mol%xyz(ix, iat)
+         hessian(:, :, iat, ix) = (transpose(gl) - transpose(gr)) / (2 * step)
+      end do
+   end do
+
+
+   write(*, '(SP,es23.16e2,",")') hessian
 
 contains
 
@@ -119,10 +199,9 @@ subroutine help(unit)
 
    write(unit, '(2x, a, t25, a)') &
       "-i, --input <format>", "Hint for the format of the input file", &
-      "-c, --charge <value>", "Set the molecular charge", &
-      "-g, --grad", "Evaluate molecular gradient and virial", &
-      "-v, --version", "Print program version and exit", &
-      "-h, --help", "Show this help message"
+      "--grad", "Evaluate molecular gradient and virial", &
+      "--version", "Print program version and exit", &
+      "--help", "Show this help message"
 
    write(unit, '(a)')
 
@@ -140,7 +219,7 @@ subroutine version(unit)
 end subroutine version
 
 
-subroutine get_arguments(input, input_format, grad, charge, error)
+subroutine get_arguments(input, input_format, grad, error)
 
    !> Input file name
    character(len=:), allocatable :: input
@@ -151,13 +230,10 @@ subroutine get_arguments(input, input_format, grad, charge, error)
    !> Evaluate gradient
    logical, intent(out) :: grad
 
-   !> Charge
-   real(wp), allocatable, intent(out) :: charge
-
    !> Error handling
    type(error_type), allocatable, intent(out) :: error
 
-   integer :: iarg, narg, iostat
+   integer :: iarg, narg
    character(len=:), allocatable :: arg
 
    grad = .false.
@@ -167,10 +243,10 @@ subroutine get_arguments(input, input_format, grad, charge, error)
       iarg = iarg + 1
       call get_argument(iarg, arg)
       select case(arg)
-      case("-h", "-help", "--help")
+      case("-help", "--help")
          call help(output_unit)
          stop
-      case("-v", "-version", "--version")
+      case("-version", "--version")
          call version(output_unit)
          stop
       case default
@@ -188,19 +264,6 @@ subroutine get_arguments(input, input_format, grad, charge, error)
             exit
          end if
          input_format = get_filetype("."//arg)
-      case("-c", "-charge", "--charge")
-         iarg = iarg + 1
-         call get_argument(iarg, arg)
-         if (.not.allocated(arg)) then
-            call fatal_error(error, "Missing argument for charge")
-            exit
-         end if
-         allocate(charge)
-         read(arg, *, iostat=iostat) charge
-         if (iostat /= 0) then
-            call fatal_error(error, "Invalid charge value")
-            exit
-         end if
       case("-grad", "--grad")
          grad = .true.
       end select

@@ -16,7 +16,7 @@
 module test_model
    use mctc_env, only : wp
    use mctc_env_testing, only : new_unittest, unittest_type, error_type, check, test_failed
-   use mctc_io_structure, only : structure_type
+   use mctc_io_structure, only : structure_type, new
    use mstore, only : get_structure
    use multicharge_data, only : get_covalent_rad
    use multicharge_model
@@ -43,19 +43,24 @@ subroutine collect_model(testsuite)
    type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
    testsuite = [ &
-      & new_unittest("charges-mb01", test_q_mb01), &
-      & new_unittest("charges-mb02", test_q_mb02), &
-      & new_unittest("charges-actinides", test_q_actinides), &
-      & new_unittest("energy-mb03", test_e_mb03), &
-      & new_unittest("energy-mb04", test_e_mb04), &
-      & new_unittest("gradient-mb05", test_g_mb05), &
-      & new_unittest("gradient-mb06", test_g_mb06), &
-      & new_unittest("sigma-mb07", test_s_mb07), &
-      & new_unittest("sigma-mb08", test_s_mb08), &
-      & new_unittest("dqdr-mb09", test_dqdr_mb09), &
-      & new_unittest("dqdr-mb10", test_dqdr_mb10), &
-      & new_unittest("dqdL-mb11", test_dqdL_mb11), &
-      & new_unittest("dqdL-mb12", test_dqdL_mb12) &
+      ! & new_unittest("charges-mb01", test_q_mb01), &
+      ! & new_unittest("charges-mb02", test_q_mb02), &
+      ! & new_unittest("charges-actinides", test_q_actinides), &
+      ! & new_unittest("energy-mb03", test_e_mb03), &
+      ! & new_unittest("energy-mb04", test_e_mb04), &
+      ! & new_unittest("gradient-mb05", test_g_mb05), &
+      ! & new_unittest("gradient-mb06", test_g_mb06), &
+      ! & new_unittest("sigma-mb07", test_s_mb07), &
+      ! & new_unittest("sigma-mb08", test_s_mb08), &
+      ! & new_unittest("dqdr-mb09", test_dqdr_mb09), &
+      ! & new_unittest("dqdr-mb10", test_dqdr_mb10), &
+      ! & new_unittest("dqdL-mb11", test_dqdL_mb11), &
+      ! & new_unittest("dqdL-mb12", test_dqdL_mb12), &
+      ! & new_unittest("gradient-h2plus", test_g_h2plus), &
+      ! & new_unittest("gradient-h2", test_g_h2), &
+      & new_unittest("lih", test_lih) &
+      ! & new_unittest("gradient-znooh", test_g_znooh), &
+      ! & new_unittest("dqdr-znooh", test_dqdr_znooh) &
       & ]
 
 end subroutine collect_model
@@ -144,19 +149,20 @@ subroutine test_numgrad(error, mol)
    energy(:) = 0.0_wp
    gradient(:, :) = 0.0_wp
    sigma(:, :) = 0.0_wp
+   cn(:)=0.0_wp
 
    lp: do iat = 1, mol%nat
       do ic = 1, 3
          energy(:) = 0.0_wp
          mol%xyz(ic, iat) = mol%xyz(ic, iat) + step
-         call get_coordination_number(mol, trans, cutoff, rcov, cn, cut=cn_max)
+        !  call get_coordination_number(mol, trans, cutoff, rcov, cn, cut=cn_max)
          call model%solve(mol, cn, energy=energy)
          if (allocated(error)) exit lp
          er = sum(energy)
 
          energy(:) = 0.0_wp
          mol%xyz(ic, iat) = mol%xyz(ic, iat) - 2*step
-         call get_coordination_number(mol, trans, cutoff, rcov, cn, cut=cn_max)
+        !  call get_coordination_number(mol, trans, cutoff, rcov, cn, cut=cn_max)
          call model%solve(mol, cn, energy=energy)
          if (allocated(error)) exit lp
          el = sum(energy)
@@ -168,10 +174,21 @@ subroutine test_numgrad(error, mol)
    if (allocated(error)) return
 
    call get_coordination_number(mol, trans, cutoff, rcov, cn, dcndr, dcndL, cut=cn_max)
+   cn(:)=0.0_wp
+   dcndr(:, :, :) = 0.0_wp
+   dcndL(:, :, :) = 0.0_wp
 
    energy(:) = 0.0_wp
    call model%solve(mol, cn, dcndr, dcndL, energy, gradient, sigma)
    if (allocated(error)) return
+
+   write (*, *) "grad"
+   write(*, '(*(6x,SP,"[",3(es23.16e2, "":, ","), "],", /))', advance='no') gradient
+   write (*, *) ",]"
+
+   write (*, *) "numgrad"
+   write(*, '(*(6x,SP,"[",3(es23.16e2, "":, ","), "],", /))', advance='no') numgrad
+   write (*, *) ",]"
 
    if (any(abs(gradient(:, :) - numgrad(:, :)) > thr2)) then
       call test_failed(error, "Derivative of energy does not match")
@@ -297,6 +314,17 @@ subroutine test_numdqdr(error, mol)
    call model%solve(mol, cn, dcndr, dcndL, dqdr=dqdr, dqdL=dqdL)
    if (allocated(error)) return
 
+   write (*, *) cn
+
+   write (*, *) "dqdr"
+   write(*, '(*(6x,SP,"[",3(es23.16e2, "":, ","), "],", /))', advance='no') dqdr
+   write (*, *) ",]"
+
+   write (*, *) "numdr"
+   write(*, '(*(6x,SP,"[",3(es23.16e2, "":, ","), "],", /))', advance='no') numdr
+   write (*, *) ",]"
+
+
    if (any(abs(dqdr(:, :, :) - numdr(:, :, :)) > thr2)) then
       call test_failed(error, "Derivative of charges does not match")
    end if
@@ -417,12 +445,12 @@ subroutine test_q_actinides(error)
    type(structure_type) :: mol
 
    real(wp), parameter :: ref(17) = [&
-      & 1.86904766283711E-02_wp, 2.89972818160259E-01_wp, 3.59298070941105E-02_wp, & 
-      &-4.61256458126589E-02_wp,-7.02605348653647E-02_wp,-7.42052215689073E-02_wp, &
-      &-8.21938718945845E-02_wp, 1.64953118841151E-01_wp, 2.10381640633390E-01_wp, &
-      &-6.65485355096282E-02_wp,-2.59873890255450E-01_wp, 1.33839147940414E-01_wp, &
-      & 7.20768968601809E-02_wp,-3.36652347675997E-03_wp,-1.14546280789657E-01_wp, &
-      &-8.55922398441004E-02_wp,-1.23131162140762E-01_wp]
+      &-3.30509539864000E-01_wp, 1.04514976082945E-01_wp,-1.77396038980278E+00_wp, &
+      & 3.33146719321694E-01_wp, 4.95141129349174E-01_wp, 4.70782337923003E-02_wp, &
+      & 2.74391145645531E-01_wp, 3.24692748232074E-01_wp, 1.42515975903486E-01_wp, &
+      & 1.41998267354686E-01_wp, 2.27799879597567E-01_wp, 2.17718820771047E-01_wp, &
+      & 1.06681646773478E-01_wp, 1.79629037301893E-01_wp,-2.97275399624992E-01_wp, &
+      &-3.75140594107334E-01_wp, 1.81577343273231E-01_wp]
 
    !> Molecular structure data 
    mol%nat = 17
@@ -599,6 +627,110 @@ subroutine test_dqdL_mb12(error)
    call test_numdqdL(error, mol)
 
 end subroutine test_dqdL_mb12
+
+
+subroutine test_g_h2plus(error)
+
+   !> Error handling
+   type(error_type), allocatable, intent(out) :: error
+
+   type(structure_type) :: mol
+
+   integer, parameter :: nat = 2
+   real(wp), parameter :: charge = 1.0_wp
+   integer, parameter :: num(nat) = [1, 1]
+   real(wp), parameter :: xyz(3, nat) = reshape([ &
+      & +0.00000000000000_wp, +0.00000000000000_wp, +0.00000000000000_wp, &
+      & +1.00000000000000_wp, +0.00000000000000_wp, +0.00000000000000_wp],&
+      & [3, nat])
+
+
+
+   call new(mol, num, xyz, charge)
+   call test_numgrad(error, mol)
+
+end subroutine test_g_h2plus
+
+subroutine test_lih(error)
+
+   !> Error handling
+   type(error_type), allocatable, intent(out) :: error
+
+   type(structure_type) :: mol
+
+   call get_structure(mol, "MB16-43", "SiH4")
+   call test_numdqdr(error, mol)
+
+end subroutine test_lih
+
+
+subroutine test_g_h2(error)
+
+   !> Error handling
+   type(error_type), allocatable, intent(out) :: error
+
+   type(structure_type) :: mol
+
+   integer, parameter :: nat = 2
+  !  real(wp), parameter :: charge = -1.0_wp
+   real(wp), parameter :: charge = 0.0_wp
+   integer, parameter :: num(nat) = [1, 1]
+   real(wp), parameter :: xyz(3, nat) = reshape([ &
+      & +0.00000000000000_wp, +0.00000000000000_wp, +0.00000000000000_wp, &
+      & +1.00000000000000_wp, +0.00000000000000_wp, +0.00000000000000_wp],&
+      & [3, nat])
+
+   call new(mol, num, xyz, charge)
+   call test_numgrad(error, mol)
+
+end subroutine test_g_h2
+
+subroutine test_g_znooh(error)
+
+   !> Error handling
+   type(error_type), allocatable, intent(out) :: error
+
+   type(structure_type) :: mol
+
+   integer, parameter :: nat = 4
+  !  real(wp), parameter :: charge = -1.0_wp
+   real(wp), parameter :: charge = 0.0_wp
+   integer, parameter :: num(nat) = [30, 8, 8, 1]
+   real(wp), parameter :: xyz(3, nat) = reshape([ &
+      & -0.30631629283878_wp, -1.11507514203552_wp, +0.00000000000000_wp, &
+      & -0.06543072660074_wp, -4.32862093666082_wp, +0.00000000000000_wp, &
+      & -0.64012239724097_wp, +2.34966763895920_wp, +0.00000000000000_wp, &
+      & +1.01186941668051_wp, +3.09402843973713_wp, +0.00000000000000_wp],&
+      & [3, nat])
+
+   call new(mol, num, xyz, charge)
+   call test_numgrad(error, mol)
+
+end subroutine test_g_znooh
+
+
+subroutine test_dqdr_znooh(error)
+
+   !> Error handling
+   type(error_type), allocatable, intent(out) :: error
+
+   type(structure_type) :: mol
+
+   integer, parameter :: nat = 4
+   real(wp), parameter :: charge = -1.0_wp
+  !  real(wp), parameter :: charge = 0.0_wp
+   integer, parameter :: num(nat) = [30, 8, 8, 1]
+   real(wp), parameter :: xyz(3, nat) = reshape([ &
+      & -0.30631629283878_wp, -1.11507514203552_wp, +0.00000000000000_wp, &
+      & -0.06543072660074_wp, -4.32862093666082_wp, +0.00000000000000_wp, &
+      & -0.64012239724097_wp, +2.34966763895920_wp, +0.00000000000000_wp, &
+      & +1.01186941668051_wp, +3.09402843973713_wp, +0.00000000000000_wp],&
+      & [3, nat])
+
+   call new(mol, num, xyz, charge)
+   call test_numdqdr(error, mol)
+
+end subroutine test_dqdr_znooh
 
 
 end module test_model

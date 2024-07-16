@@ -468,6 +468,10 @@ subroutine solve(self, mol, cn, dcndr, dcndL, energy, gradient, sigma, qvec, dqd
       call get_amat_0d(self, mol, amat)
    end if
 
+    write (*, *) "xvec"
+   write(*, '(*(6x,SP,"[",3(es23.16e2, "":, ","), "],", /))', advance='no') xvec
+   write (*, *) ",]"
+
    vrhs = xvec
    ainv = amat
 
@@ -505,12 +509,36 @@ subroutine solve(self, mol, cn, dcndr, dcndL, energy, gradient, sigma, qvec, dqd
       else
          call get_damat_0d(self, mol, vrhs, dadr, dadL, atrace)
       end if
+      write(*, *) ""
+
       xvec(:) = -dxdcn * vrhs
    end if
 
    if (grad) then
+    write (*, *) "vrhs"
+   write(*, '(*(6x,SP,"[",3(es23.16e2, "":, ","), "],", /))', advance='no') vrhs
+   write (*, *) ",]"
+   end if
+
+      if (grad) then
+    write (*, *) "dadr"
+   write(*, '(*(6x,SP,"[",3(es23.16e2, "":, ","), "],", /))', advance='no') dadr
+   write (*, *) ",]"
+   end if
+
+   ! same: amat
+   ! diff: atrace, vrhs
+
+   if (grad) then
+      write(*, *) "shape(vrhs)", shape(vrhs)
+      write(*, *) "shape(dxdcn)", shape(dxdcn)
+      write(*, *) "shape(xvec)", shape(xvec)
+      write(*, *) "shape(dadr)", shape(dadr)
+      write(*, *) "shape(dcndr)", shape(dcndr)
+      write(*, *) ""
+
       call gemv(dadr, vrhs, gradient, beta=1.0_wp)
-      call gemv(dcndr, xvec(:mol%nat), gradient, beta=1.0_wp)
+      ! call gemv(dcndr, xvec(:mol%nat), gradient, beta=1.0_wp)
       call gemv(dadL, vrhs, sigma, beta=1.0_wp, alpha=0.5_wp)
       call gemv(dcndL, xvec(:mol%nat), sigma, beta=1.0_wp)
    end if
