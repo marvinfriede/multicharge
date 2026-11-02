@@ -34,7 +34,7 @@ module multicharge_model_eeqbc
    implicit none
    private
 
-   public :: eeqbc_model, new_eeqbc_model
+   public :: eeqbc_model, new_eeqbc_model, eeqbc_cache
 
    !> Cache for the EEQ-BC charge model
    type, extends(model_cache) :: eeqbc_cache
@@ -291,7 +291,7 @@ subroutine get_xvec(self, mol, cache, xvec)
 
    select case (count(mol%periodic))
    case (1, 2, 3)
-      call get_dir_trans(mol, dtrans, self%ncoord%cutoff)
+      call get_eeqbc_dir_trans(self, mol, ptr%wsc, dtrans)
       !$omp parallel default(none) &
       !$omp shared(mol, self, ptr, xvec, dtrans) private(iat, izp, img, wsw) &
       !$omp private(capi, vec, rvdw, ctmp, xvec_local)
@@ -374,7 +374,7 @@ subroutine get_xvec_derivs(self, mol, cache, dxdr, dxdL)
 
    select case (count(mol%periodic))
    case (1, 2, 3)
-      call get_dir_trans(mol, dtrans, self%ncoord%cutoff)
+      call get_eeqbc_dir_trans(self, mol, ptr%wsc, dtrans)
       !$omp parallel default(none) &
       !$omp shared(mol, self, ptr, dxdr, dxdL, dtrans) &
       !$omp private(iat, izp, jat, jzp, img, wsw) &
@@ -488,7 +488,7 @@ subroutine add_model_hessian(self, mol, error, cache, adj, hessian)
    real(wp) :: val, dr, drr, dg, drg, dgg, cap, dcap, ddcap, k, t
    real(wp) :: udiff, piq, pjq, cross, term, ti, tj, li, lj, ri, rj, cij
    real(wp), allocatable :: width(:), dw(:), v(:), hard(:), dh(:), ddh(:)
-   real(wp), allocatable :: dEdcn(:), dEdqloc(:), second(:, :), dtrans(:, :)
+   real(wp), allocatable :: dEdcn(:), dEdqloc(:), second(:, :), dtrans(:, :), cn_trans(:, :)
    real(wp), allocatable :: mixed(:, :, :), mixed_loc(:, :, :)
 
    call view(cache, ptr)
@@ -500,9 +500,11 @@ subroutine add_model_hessian(self, mol, error, cache, adj, hessian)
    periodic = count(mol%periodic) > 0
    select case (count(mol%periodic))
    case (1, 2, 3)
-      call get_dir_trans(mol, dtrans, self%ncoord%cutoff)
+      call get_eeqbc_dir_trans(self, mol, ptr%wsc, dtrans)
+      call get_dir_trans(mol, cn_trans, self%ncoord%cutoff)
    case default
       allocate(dtrans(3, 1), source=0.0_wp)
+      allocate(cn_trans(3, 1), source=0.0_wp)
    end select
    allocate(width(nat), dw(nat), v(nat), hard(nat), dh(nat), ddh(nat))
    allocate(dEdcn(nat), dEdqloc(nat), second(nat, nat))
@@ -592,8 +594,8 @@ subroutine add_model_hessian(self, mol, error, cache, adj, hessian)
       end do
    end do
 
-   call self%ncoord%add_coordination_number_hessian(mol, dtrans, dEdcn, hessian)
-   call self%ncoord_en%add_coordination_number_hessian(mol, dtrans, dEdqloc, hessian)
+   call self%ncoord%add_coordination_number_hessian(mol, cn_trans, dEdcn, hessian)
+   call self%ncoord_en%add_coordination_number_hessian(mol, cn_trans, dEdqloc, hessian)
    call add_chain_hessian(ptr%dcndr, mixed, hessian, second)
    call add_chain_hessian(ptr%dqlocdr, mixed_loc, hessian)
 end subroutine add_model_hessian
@@ -686,7 +688,7 @@ subroutine get_amat_pbc(self, mol, wsc, cn, qloc, cmat, amat)
    ! Thread-private array for reduction
    real(wp), allocatable :: amat_local(:, :)
 
-   call get_dir_trans(mol, dtrans, self%ncoord%cutoff)
+   call get_eeqbc_dir_trans(self, mol, wsc, dtrans)
 
    amat(:, :) = 0.0_wp
 
@@ -958,7 +960,7 @@ subroutine get_damat_pbc(self, mol, wsc, cn, qloc, qvec, dcndr, dcndL, dqlocdr, 
    real(wp), allocatable :: atrace_local(:, :)
    real(wp), allocatable :: dadr_local(:, :, :), dadL_local(:, :, :)
 
-   call get_dir_trans(mol, dtrans, self%ncoord%cutoff)
+   call get_eeqbc_dir_trans(self, mol, wsc, dtrans)
 
    allocate(dgamdr(3, mol%nat))
 
@@ -1217,7 +1219,7 @@ subroutine get_cmat_3d(self, mol, wsc, cmat)
    ! Thread-private array for reduction
    real(wp), allocatable :: cmat_local(:, :)
 
-   call get_dir_trans(mol, dtrans, self%ncoord%cutoff)
+   call get_eeqbc_dir_trans(self, mol, wsc, dtrans)
 
    cmat(:, :) = 0.0_wp
 
@@ -1396,7 +1398,7 @@ subroutine get_dcmat_3d(self, mol, wsc, dcdr, dcdL)
    ! Thread-private arrays for reduction
    real(wp), allocatable :: dcdr_local(:, :, :), dcdL_local(:, :, :)
 
-   call get_dir_trans(mol, dtrans, self%ncoord%cutoff)
+   call get_eeqbc_dir_trans(self, mol, wsc, dtrans)
 
    dcdr(:, :, :) = 0.0_wp
    dcdL(:, :, :) = 0.0_wp
@@ -1473,6 +1475,51 @@ subroutine get_dcpair_dir(kbc, rij, trans, rvdw, capi, capj, dgpair, dspair)
       dspair(:, :) = dspair + dstmp
    end do
 end subroutine get_dcpair_dir
+
+!> Generate direct-space lattice translations for EEQBC capacitance and Coulomb sums
+subroutine get_eeqbc_dir_trans(self, mol, wsc, dtrans)
+   !> Bond capacitor electronegativity equilibration model
+   class(eeqbc_model), intent(in) :: self
+   !> Molecular structure data
+   type(structure_type), intent(in) :: mol
+   !> Wigner-Seitz cell instance
+   type(wignerseitz_cell), intent(in) :: wsc
+   !> Direct-space lattice translation vectors
+   real(wp), allocatable, intent(out) :: dtrans(:, :)
+
+   integer :: ndim, iat, jat, img
+   real(wp) :: rcut, rvdw_max, r_disp, kbc_eff, vec(3)
+   real(wp), parameter :: erf_tail = 6.2_wp
+
+   ndim = 0
+   if (allocated(mol%periodic)) ndim = count(mol%periodic)
+
+   select case (ndim)
+   case (1, 2)
+      rvdw_max = 0.0_wp
+      if (allocated(self%rvdw)) then
+         if (size(self%rvdw) > 0) rvdw_max = maxval(self%rvdw)
+      end if
+      r_disp = 0.0_wp
+      do iat = 1, mol%nat
+         do jat = 1, iat
+            do img = 1, wsc%nimg(jat, iat)
+               vec = mol%xyz(:, iat) - mol%xyz(:, jat) &
+                  & - wsc%trans(:, wsc%tridx(img, jat, iat))
+               r_disp = max(r_disp, norm2(vec))
+            end do
+         end do
+      end do
+      kbc_eff = max(self%kbc, 1.0e-3_wp)
+      rcut = max(self%ncoord%cutoff, rvdw_max * (1.0_wp + erf_tail / kbc_eff) + r_disp)
+      call get_dir_trans(mol, dtrans, rcut, wsc_wrapped=.true.)
+   case (3)
+      call get_dir_trans(mol, dtrans, self%ncoord%cutoff, wsc_wrapped=.true.)
+   case default
+      allocate(dtrans(3, 1), source=0.0_wp)
+   end select
+
+end subroutine get_eeqbc_dir_trans
 
 !> Inspect cache and reallocate it in case of type mismatch
 subroutine taint(cache, ptr)

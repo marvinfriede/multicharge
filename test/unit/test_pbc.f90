@@ -25,7 +25,7 @@ module test_pbc
    use multicharge_model, only: mchrg_model_type
    use multicharge_model_cache, only: cache_container
    use multicharge_model_eeq, only: eeq_cache
-   use multicharge_model_eeqbc, only: eeqbc_model
+   use multicharge_model_eeqbc, only: eeqbc_model, eeqbc_cache
    use multicharge_model_type, only: get_dir_trans
    use multicharge_param, only: new_eeq2019_model, new_eeqbc2025_model
    implicit none
@@ -70,6 +70,8 @@ subroutine collect_pbc(testsuite)
       & new_unittest("eeq-2d-all-masks", test_eeq_2d_all_masks), &
       & new_unittest("ewald-convergence-1d-2d", test_ewald_convergence_1d_2d), &
       & new_unittest("pbc-wsc-invariance-1d-2d", test_pbc_wsc_invariance_1d_2d), &
+      & new_unittest("eeqbc-convergence-1d-2d", test_eeqbc_convergence_1d_2d), &
+      & new_unittest("eeqbc-water-helium-358", test_eeqbc_water_helium_358), &
       & new_unittest("degenerate-lattice-error", test_degenerate_lattice_error) &
       & ]
 
@@ -1893,5 +1895,270 @@ subroutine test_pbc_wsc_invariance_1d_2d(error)
    end if
 
 end subroutine test_pbc_wsc_invariance_1d_2d
+
+!> Verify 1D and 2D EEQBC direct-lattice summation convergence across screening
+!> parameters, lattice lengths, skewed cells, and neutral/charged systems, as well
+!> as multi-cell shift and unimodular basis invariance.
+subroutine test_eeqbc_convergence_1d_2d(error)
+   type(error_type), allocatable, intent(out) :: error
+
+   type(structure_type) :: mol, mol_test
+   class(mchrg_model_type), allocatable :: model
+   type(cache_container) :: cache_cur, cache_ref
+   real(wp) :: cmat_cur(4, 4), cmat_ref(4, 4), amat_cur(4, 4), amat_ref(4, 4)
+   real(wp) :: q_cur(3), q_ref(3), dqdr_cur(3, 3, 3), dqdr_ref(3, 3, 3)
+   real(wp) :: dqdL_cur(3, 3, 3), dqdL_ref(3, 3, 3), hess_cur(9, 9), hess_ref(9, 9)
+   real(wp) :: a1(3), a2(3), lat_ref(3, 3), lat_test(3, 3), xyz_ref(3, 3), xyz_test(3, 3)
+   real(wp), parameter :: weights(3) = [0.6_wp, -0.4_wp, 0.25_wp]
+   integer :: icase
+
+   ! Test convergence against an independently over-converged direct sum (cutoff = 120 Bohr)
+   ! across 4 cases covering short/long cells, small/large kbc, skewed 2D, neutral/charged:
+   do icase = 1, 4
+      select case (icase)
+      case (1)
+         ! Short-period neutral 1D cell with small kbc = 0.40 (long-range capacitance tail)
+         call new(mol, [8, 1, 6], reshape([ &
+            & 0.0_wp,  0.0_wp,  0.0_wp, &
+            & 1.2_wp,  0.7_wp, -0.3_wp, &
+            & 0.5_wp, -0.8_wp,  0.6_wp], [3, 3]), charge=0.0_wp, &
+            & lattice=reshape([ &
+            & 3.2_wp, 0.0_wp, 0.0_wp, &
+            & 0.0_wp, 20.0_wp, 0.0_wp, &
+            & 0.0_wp, 0.0_wp, 20.0_wp], [3, 3]), &
+            & periodic=[.true., .false., .false.])
+      case (2)
+         ! Longer charged (+1) 1D cell with larger kbc = 1.10
+         call new(mol, [30, 8, 1], reshape([ &
+            & 0.0_wp, 0.0_wp,  0.0_wp, &
+            & 2.4_wp, 0.3_wp, -0.4_wp, &
+            & 1.1_wp, 1.8_wp,  0.7_wp], [3, 3]), charge=1.0_wp, &
+            & lattice=reshape([ &
+            & 12.0_wp, 0.0_wp, 0.0_wp, &
+            & 0.0_wp, 20.0_wp, 0.0_wp, &
+            & 0.0_wp, 0.0_wp, 20.0_wp], [3, 3]), &
+            & periodic=[.true., .false., .false.])
+      case (3)
+         ! Strongly skewed neutral 2D cell with default kbc = 0.65
+         call new(mol, [8, 1, 1], reshape([ &
+            & 0.1_wp, 0.1_wp, -0.2_wp, &
+            & 1.4_wp, 0.5_wp,  0.3_wp, &
+            &-0.3_wp, 1.1_wp,  0.1_wp], [3, 3]), charge=0.0_wp, &
+            & lattice=reshape([ &
+            & 8.0_wp, 0.0_wp, 0.0_wp, &
+            & 7.2_wp, 2.2_wp, 0.0_wp, &
+            & 0.0_wp, 0.0_wp, 20.0_wp], [3, 3]), &
+            & periodic=[.true., .true., .false.])
+      case (4)
+         ! Charged (-1) 2D cell with small kbc = 0.45
+         call new(mol, [30, 8, 1], reshape([ &
+            & 0.0_wp, 0.0_wp, -0.3_wp, &
+            & 2.3_wp, 0.2_wp,  0.5_wp, &
+            & 0.6_wp, 1.9_wp,  0.4_wp], [3, 3]), charge=-1.0_wp, &
+            & lattice=reshape([ &
+            & 4.5_wp, 0.0_wp, 0.0_wp, &
+            & 0.4_wp, 5.2_wp, 0.0_wp, &
+            & 0.0_wp, 0.0_wp, 20.0_wp], [3, 3]), &
+            & periodic=[.true., .true., .false.])
+      end select
+
+      if (allocated(model)) deallocate(model)
+      call new_eeqbc2025_model(mol, model, error)
+      if (allocated(error)) return
+      select type (m => model)
+      type is (eeqbc_model)
+         select case (icase)
+         case (1); m%kbc = 0.40_wp
+         case (2); m%kbc = 1.10_wp
+         case (3); m%kbc = 0.65_wp
+         case (4); m%kbc = 0.45_wp
+         end select
+      end select
+
+      ! Default cutoff evaluation
+      call get_charges(model, mol, error, q_cur, dqdr_cur, dqdL_cur, cache=cache_cur)
+      if (allocated(error)) return
+      call model%get_coulomb_matrix(mol, cache_cur, amat_cur)
+      select type (raw => cache_cur%raw)
+      type is (eeqbc_cache)
+         cmat_cur = raw%cmat
+      end select
+      hess_cur = 0.0_wp
+      call add_charge_hessian(model, mol, error, weights, hess_cur, cache_cur)
+      if (allocated(error)) return
+
+      ! Over-converged reference evaluation (cutoff = 120 Bohr)
+      model%ncoord%cutoff = 120.0_wp
+      model%ncoord_en%cutoff = 120.0_wp
+      call get_charges(model, mol, error, q_ref, dqdr_ref, dqdL_ref, cache=cache_ref)
+      if (allocated(error)) return
+      call model%get_coulomb_matrix(mol, cache_ref, amat_ref)
+      select type (raw => cache_ref%raw)
+      type is (eeqbc_cache)
+         cmat_ref = raw%cmat
+      end select
+      hess_ref = 0.0_wp
+      call add_charge_hessian(model, mol, error, weights, hess_ref, cache=cache_ref)
+      if (allocated(error)) return
+
+      if (maxval(abs(cmat_cur - cmat_ref)) > 1.0e-13_wp) then
+         call test_failed(error, "1D/2D EEQBC capacitance matrix cmat is not converged")
+         return
+      end if
+      if (maxval(abs(amat_cur - amat_ref)) > 1.0e-13_wp) then
+         call test_failed(error, "1D/2D EEQBC Coulomb matrix amat is not converged")
+         return
+      end if
+      if (maxval(abs(q_cur - q_ref)) > 1.0e-13_wp &
+         & .or. maxval(abs(dqdr_cur - dqdr_ref)) > 1.0e-12_wp &
+         & .or. maxval(abs(dqdL_cur - dqdL_ref)) > 1.0e-12_wp &
+         & .or. maxval(abs(hess_cur - hess_ref)) > 1.0e-11_wp) then
+         call test_failed(error, "1D/2D EEQBC charges or derivatives are not cutoff-converged")
+         return
+      end if
+   end do
+
+   ! Verify 2D EEQBC invariance under unimodular basis transformation and multi-cell shifts
+   a1 = [5.4_wp, 0.2_wp, 0.0_wp]
+   a2 = [0.6_wp, 5.8_wp, 1.2_wp]
+   lat_ref = 0.0_wp
+   lat_ref(:, 1) = a1
+   lat_ref(:, 2) = a2
+   lat_test = 0.0_wp
+   lat_test(:, 1) = a1
+   lat_test(:, 2) = a2 + 4.0_wp * a1
+
+   xyz_ref = reshape([ &
+      & 0.0_wp, 0.0_wp, -0.2_wp, &
+      & 2.1_wp, 0.5_wp,  0.3_wp, &
+      & 0.5_wp, 1.9_wp,  0.4_wp], [3, 3])
+   xyz_test = xyz_ref
+   xyz_test(:, 2) = xyz_test(:, 2) + 3.0_wp * a1 - 2.0_wp * a2
+   xyz_test(:, 3) = xyz_test(:, 3) - 3.0_wp * a1 + 2.0_wp * a2
+
+   call new(mol, [30, 8, 1], xyz_ref, charge=-1.0_wp, &
+      & lattice=lat_ref, periodic=[.true., .true., .false.])
+   call new(mol_test, [30, 8, 1], xyz_test, charge=-1.0_wp, &
+      & lattice=lat_test, periodic=[.true., .true., .false.])
+
+   deallocate(model)
+   call new_eeqbc2025_model(mol, model, error)
+   if (allocated(error)) return
+
+   call get_charges(model, mol, error, q_ref, dqdr_ref, dqdL_ref, cache=cache_ref)
+   if (allocated(error)) return
+   hess_ref = 0.0_wp
+   call add_charge_hessian(model, mol, error, weights, hess_ref, cache=cache_ref)
+   if (allocated(error)) return
+
+   call get_charges(model, mol_test, error, q_cur, dqdr_cur, dqdL_cur, cache=cache_cur)
+   if (allocated(error)) return
+   hess_cur = 0.0_wp
+   call add_charge_hessian(model, mol_test, error, weights, hess_cur, cache=cache_cur)
+   if (allocated(error)) return
+
+   if (maxval(abs(q_cur - q_ref)) > 1.0e-12_wp &
+      & .or. maxval(abs(dqdr_cur - dqdr_ref)) > 1.0e-11_wp &
+      & .or. maxval(abs(dqdL_cur - dqdL_ref)) > 1.0e-11_wp &
+      & .or. maxval(abs(hess_cur - hess_ref)) > 1.0e-10_wp) then
+      call test_failed(error, &
+         & "2D EEQBC not invariant under unimodular basis transform and multi-cell shift")
+      return
+   end if
+
+end subroutine test_eeqbc_convergence_1d_2d
+
+!> Regression test for DFT-D4 issue #358: neutral water-helium complex at large
+!> separation in 0D, 1D, and 2D. Verifies that EEQBC screens out the long-range
+!> inter-fragment capacitance and Coulomb coupling, suppressing distance-dependent
+!> asymptotic charge transfer and charge gradients in contrast to unscreened EEQ.
+subroutine test_eeqbc_water_helium_358(error)
+   type(error_type), allocatable, intent(out) :: error
+
+   type(structure_type) :: mol_r1, mol_r2
+   class(mchrg_model_type), allocatable :: model_eeq, model_eeqbc
+   type(cache_container) :: cache_eeq, cache_eeqbc
+   real(wp) :: xyz_r1(3, 4), xyz_r2(3, 4), lat(3, 3)
+   real(wp) :: q_eeq1(4), q_eeq2(4), dqdr_eeq2(3, 4, 4), dqdL_eeq2(3, 3, 4)
+   real(wp) :: q_bc1(4), q_bc2(4), dqdr_bc2(3, 4, 4), dqdL_bc2(3, 3, 4)
+   real(wp) :: amat_eeq(5, 5), amat_bc(5, 5), cmat_bc(5, 5)
+   logical :: pmask(3)
+   integer :: idim
+
+   xyz_r1 = reshape([ &
+      &  0.0000000000_wp,  0.0000000000_wp,  0.2214080000_wp, &
+      &  0.0000000000_wp,  1.4309280000_wp, -0.8856320000_wp, &
+      &  0.0000000000_wp, -1.4309280000_wp, -0.8856320000_wp, &
+      &  0.0000000000_wp,  0.0000000000_wp, 35.0000000000_wp], [3, 4])
+   xyz_r2 = xyz_r1
+   xyz_r2(:, 4) = [0.0_wp, 0.0_wp, 60.0_wp]
+
+   lat = reshape([ &
+      & 12.0_wp,  0.0_wp,   0.0_wp, &
+      &  0.0_wp, 12.0_wp,   0.0_wp, &
+      &  0.0_wp,  0.0_wp, 140.0_wp], [3, 3])
+
+   do idim = 0, 2
+      select case (idim)
+      case (0); pmask = [.false., .false., .false.]
+      case (1); pmask = [.true.,  .false., .false.]
+      case (2); pmask = [.true.,  .true.,  .false.]
+      end select
+
+      if (idim == 0) then
+         call new(mol_r1, [8, 1, 1, 2], xyz_r1, charge=0.0_wp)
+         call new(mol_r2, [8, 1, 1, 2], xyz_r2, charge=0.0_wp)
+      else
+         call new(mol_r1, [8, 1, 1, 2], xyz_r1, charge=0.0_wp, &
+            & lattice=lat, periodic=pmask)
+         call new(mol_r2, [8, 1, 1, 2], xyz_r2, charge=0.0_wp, &
+            & lattice=lat, periodic=pmask)
+      end if
+
+      if (allocated(model_eeq)) deallocate(model_eeq)
+      if (allocated(model_eeqbc)) deallocate(model_eeqbc)
+      call new_eeq2019_model(mol_r2, model_eeq, error)
+      if (allocated(error)) return
+      call new_eeqbc2025_model(mol_r2, model_eeqbc, error)
+      if (allocated(error)) return
+
+      call get_charges(model_eeq, mol_r1, error, q_eeq1)
+      if (allocated(error)) return
+      call get_charges(model_eeq, mol_r2, error, q_eeq2, dqdr_eeq2, dqdL_eeq2, cache=cache_eeq)
+      if (allocated(error)) return
+      call model_eeq%get_coulomb_matrix(mol_r2, cache_eeq, amat_eeq)
+
+      call get_charges(model_eeqbc, mol_r1, error, q_bc1)
+      if (allocated(error)) return
+      call get_charges(model_eeqbc, mol_r2, error, q_bc2, dqdr_bc2, dqdL_bc2, cache=cache_eeqbc)
+      if (allocated(error)) return
+      call model_eeqbc%get_coulomb_matrix(mol_r2, cache_eeqbc, amat_bc)
+      select type (raw => cache_eeqbc%raw)
+      type is (eeqbc_cache)
+         cmat_bc = raw%cmat
+      end select
+
+      ! Unscreened EEQ has long-range 1/R coupling and distance-dependent charge transfer
+      if (maxval(abs(amat_eeq(1:3, 4))) < 1.0e-2_wp &
+         & .or. abs(q_eeq2(4) - q_eeq1(4)) < 1.0e-4_wp) then
+         call test_failed(error, "Expected long-range 1/R coupling in unscreened EEQ")
+         return
+      end if
+
+      ! EEQBC screens out inter-fragment capacitance and Coulomb coupling at large R,
+      ! suppressing distance-dependent charge variation and He charge response to zero
+      if (maxval(abs(cmat_bc(1:3, 4))) > 1.0e-14_wp &
+         & .or. maxval(abs(amat_bc(1:3, 4))) > 1.0e-14_wp) then
+         call test_failed(error, "EEQBC failed to screen long-range H2O-He coupling")
+         return
+      end if
+      if (maxval(abs(q_bc2 - q_bc1)) > 1.0e-12_wp &
+         & .or. maxval(abs(dqdr_bc2(:, 4, :))) > 1.0e-14_wp) then
+         call test_failed(error, "EEQBC failed to suppress asymptotic charge response on He")
+         return
+      end if
+   end do
+
+end subroutine test_eeqbc_water_helium_358
 
 end module test_pbc
