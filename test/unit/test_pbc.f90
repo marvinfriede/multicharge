@@ -63,6 +63,7 @@ subroutine collect_pbc(testsuite)
       & new_unittest("eeqbc-dqdL-oxacb", test_eeqbc_dqdL_oxacb), &
       & new_unittest("eeqbc-1d-all-masks", test_eeqbc_1d_all_masks), &
       & new_unittest("eeqbc-2d-all-masks", test_eeqbc_2d_all_masks), &
+      & new_unittest("eeq-1d-all-masks", test_eeq_1d_all_masks), &
       & new_unittest("eeq-2d-all-masks", test_eeq_2d_all_masks), &
       & new_unittest("degenerate-lattice-error", test_degenerate_lattice_error) &
       & ]
@@ -1438,5 +1439,98 @@ subroutine test_eeq_2d_all_masks(error)
    end if
    deallocate(expected)
 end subroutine test_eeq_2d_all_masks
+
+subroutine test_eeq_1d_all_masks(error)
+   type(error_type), allocatable, intent(out) :: error
+   type(error_type), allocatable :: expected
+   type(structure_type) :: mol, mol_big
+   class(mchrg_model_type), allocatable :: model
+   real(wp) :: xyz(3, 3), a_wire(3), lat1(3, 3), lat2(3, 3)
+   real(wp) :: q1(3), q2(3), q_ref(3), dqdr1(3, 3, 3), dqdr2(3, 3, 3)
+   real(wp) :: dqdL1(3, 3, 3), dqdL2(3, 3, 3)
+   logical :: masks(3, 3)
+   integer :: imask
+
+   ! Includes both an on-axis atom pair (atoms 1 and 2 have rho = 0 along a_wire)
+   ! and off-axis atom pairs (atom 3 has rho > 0)
+   a_wire = [5.3_wp, 0.6_wp, -0.5_wp]
+   xyz(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
+   xyz(:, 2) = 0.42_wp * a_wire
+   xyz(:, 3) = [1.1_wp, 1.8_wp, 0.7_wp]
+   masks = reshape([ &
+      & .true., .false., .false., &
+      & .false., .true., .false., &
+      & .false., .false., .true.], [3, 3])
+
+   do imask = 1, 3
+      lat1 = 0.0_wp
+      lat1(:, imask) = a_wire
+      lat1(:, mod(imask, 3) + 1) = [0.0_wp, 20.0_wp, 0.0_wp]
+      lat1(:, mod(imask + 1, 3) + 1) = [0.0_wp, 0.0_wp, 20.0_wp]
+
+      lat2 = 0.0_wp
+      lat2(:, imask) = a_wire
+      lat2(:, mod(imask, 3) + 1) = [15.0_wp, 200.0_wp, -30.0_wp]
+      lat2(:, mod(imask + 1, 3) + 1) = [-40.0_wp, 10.0_wp, 250.0_wp]
+
+      call new(mol, [30, 8, 1], xyz, charge=0.0_wp, &
+         & lattice=lat1, periodic=masks(:, imask))
+      call new(mol_big, [30, 8, 1], xyz, charge=0.0_wp, &
+         & lattice=lat2, periodic=masks(:, imask))
+
+      call new_eeq2019_model(mol, model, error)
+      if (allocated(error)) return
+
+      call get_charges(model, mol, error, q1, dqdr1, dqdL1)
+      if (allocated(error)) return
+      call get_charges(model, mol_big, error, q2, dqdr2, dqdL2)
+      if (allocated(error)) return
+
+      if (abs(sum(q1)) > thr) then
+         call test_failed(error, "1D EEQ total charge constraint violated")
+         return
+      end if
+      if (maxval(abs(q1 - q2)) > thr .or. maxval(abs(dqdr1 - dqdr2)) > thr &
+         & .or. maxval(abs(dqdL1 - dqdL2)) > thr) then
+         call test_failed(error, "1D EEQ depends on nonperiodic lattice vectors")
+         return
+      end if
+      if (imask == 1) then
+         q_ref = q1
+      else if (maxval(abs(q1 - q_ref)) > thr) then
+         call test_failed(error, "1D EEQ charges depend on periodic mask index")
+         return
+      end if
+
+      ! Full derivative validation for TFF and FTF
+      if (imask <= 2) then
+         call test_dbdr(error, mol, model)
+         if (allocated(error)) return
+         call test_dbdL(error, mol, model)
+         if (allocated(error)) return
+         call test_dadr(error, mol, model)
+         if (allocated(error)) return
+         call test_dadL(error, mol, model)
+         if (allocated(error)) return
+         call test_numgrad(error, mol, model)
+         if (allocated(error)) return
+         call test_numsigma(error, mol, model)
+         if (allocated(error)) return
+         call test_numdqdr(error, mol, model)
+         if (allocated(error)) return
+         call test_numdqdL(error, mol, model)
+         if (allocated(error)) return
+      end if
+   end do
+
+   ! Charged 1D EEQ cell must be explicitly rejected
+   mol%charge = 1.0_wp
+   call get_charges(model, mol, expected, q1)
+   if (.not. allocated(expected)) then
+      call test_failed(error, "Charged 1D EEQ cell was not rejected")
+      return
+   end if
+   deallocate(expected)
+end subroutine test_eeq_1d_all_masks
 
 end module test_pbc

@@ -68,7 +68,7 @@ subroutine test_eeq_periodic(error)
       call run_case(error, .false., icase)
       if (allocated(error)) return
    end do
-   do icase = 13, 14
+   do icase = 12, 15
       call run_case(error, .false., icase)
       if (allocated(error)) return
    end do
@@ -77,7 +77,7 @@ end subroutine test_eeq_periodic
 subroutine test_eeqbc_periodic(error)
    type(error_type), allocatable, intent(out) :: error
    integer :: icase
-   do icase = 5, 14
+   do icase = 5, 15
       call run_case(error, .true., icase)
       if (allocated(error)) return
    end do
@@ -166,6 +166,14 @@ subroutine run_case(error, bond_capacity, icase)
          & 6.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 7.0_wp, 0.0_wp, &
          & 0.0_wp, 0.0_wp, 0.0_wp], [3, 3])
       mol%periodic = [.true., .true., .false.]
+   case(15)
+      ! 1D periodic wire (FTF), neutral, with both on-axis and off-axis pairs
+      call new(mol, [30, 8, 1], reshape([ &
+         & 0.0_wp, 0.0_wp, 0.0_wp, 0.16_wp, 2.12_wp, -0.12_wp, &
+         & -0.4_wp, 1.1_wp, 1.5_wp], [3, 3]), charge=0.0_wp)
+      mol%lattice = reshape([0.0_wp, 0.0_wp, 0.0_wp, 0.4_wp, 5.3_wp, -0.3_wp, &
+         & 0.0_wp, 0.0_wp, 0.0_wp], [3, 3])
+      mol%periodic = [.false., .true., .false.]
    case default
       call test_failed(error, "Unknown charge Hessian test case")
       return
@@ -328,9 +336,10 @@ subroutine test_invalid(error)
    call get_charges(model, mol, error, q, cache=cache)
    if (allocated(error)) return
    mol%periodic = [.true., .false., .false.]
+   mol%charge = 1.0_wp
    call add_charge_hessian(model, mol, expected, [1.0_wp], hess, cache)
    if (.not. allocated(expected)) then
-      call test_failed(error, "Partial periodicity is not supported by the 3D response")
+      call test_failed(error, "Charged 1D EEQ cell must be rejected by Hessian")
       return
    end if
    if (any(hess /= 0.125_wp)) call test_failed(error, "Rejected calls changed the Hessian")

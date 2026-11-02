@@ -22,9 +22,34 @@ module multicharge_ewald
 
    public :: get_alpha, get_alpha_2d, erfc_exp_2d
    public :: get_ewald_dir_trans_2d, get_ewald_rec_trans_2d
+   public :: get_ewald_dir_trans_1d, get_ewald_rec_trans_1d
+   public :: fast_f012_1d, fast_k012_1d
 
    real(wp), parameter :: twopi = 2 * pi
    real(wp), parameter :: eps = sqrt(epsilon(0.0_wp))
+   real(wp), parameter :: euler_gamma = 0.57721566490153286060_wp
+
+   !> Positive nodes of 16-point Gauss-Legendre quadrature on [-1, 1]
+   real(wp), parameter :: gl16_x(8) = [ &
+      & 0.095012509837637440185_wp, &
+      & 0.281603550779258913230_wp, &
+      & 0.458016777657227386342_wp, &
+      & 0.617876244402643748447_wp, &
+      & 0.755404408355003033895_wp, &
+      & 0.865631202387831743880_wp, &
+      & 0.944575023073232576078_wp, &
+      & 0.989400934991649932596_wp]
+
+   !> Weights of 16-point Gauss-Legendre quadrature on [-1, 1]
+   real(wp), parameter :: gl16_w(8) = [ &
+      & 0.189450610455068496285_wp, &
+      & 0.182603415044923588867_wp, &
+      & 0.169156519395002538189_wp, &
+      & 0.149595988816576732081_wp, &
+      & 0.124628971255533872052_wp, &
+      & 0.095158511682492784810_wp, &
+      & 0.062253523938647892863_wp, &
+      & 0.027152459411754094852_wp]
 
    abstract interface
       !> Returns the max. value of a term in the reciprocal space part of the Ewald
@@ -271,6 +296,230 @@ pure subroutine get_ewald_rec_trans_2d(a1, a2, alpha, trans, area, n_hat)
    end do
 
 end subroutine get_ewald_rec_trans_2d
+
+
+!> Generate converged direct-space lattice translations for 1D Ewald
+pure subroutine get_ewald_dir_trans_1d(a1, alpha, gam_min, trans)
+   !> Periodic lattice vector
+   real(wp), intent(in) :: a1(3)
+   !> Ewald splitting parameter
+   real(wp), intent(in) :: alpha
+   !> Minimum Gaussian exponent min_ij(gamma_ij)
+   real(wp), intent(in) :: gam_min
+   !> Direct-space lattice translations (3, ntrans)
+   real(wp), allocatable, intent(out) :: trans(:, :)
+
+   real(wp) :: kappa, rcut, len1
+   integer :: rep1, ntr, i1, idx
+
+   kappa = min(alpha, gam_min)
+   rcut = 6.0_wp / kappa
+   len1 = norm2(a1)
+   rep1 = min(40, max(2, ceiling(rcut / len1)))
+
+   ntr = 2 * rep1 + 1
+   allocate(trans(3, ntr))
+   idx = 0
+   do i1 = -rep1, rep1
+      idx = idx + 1
+      trans(:, idx) = real(i1, wp) * a1
+   end do
+
+end subroutine get_ewald_dir_trans_1d
+
+
+!> Generate converged nonzero reciprocal-space lattice vectors for 1D Ewald
+pure subroutine get_ewald_rec_trans_1d(a1, alpha, trans, len1, u_hat)
+   !> Periodic lattice vector
+   real(wp), intent(in) :: a1(3)
+   !> Ewald splitting parameter
+   real(wp), intent(in) :: alpha
+   !> Nonzero reciprocal lattice vectors (3, nrec)
+   real(wp), allocatable, intent(out) :: trans(:, :)
+   !> Physical length of the 1D unit cell
+   real(wp), intent(out) :: len1
+   !> Unit vector along the 1D periodic axis
+   real(wp), intent(out) :: u_hat(3)
+
+   real(wp) :: b1(3), gcut
+   integer :: rep1, ntr, i1, idx
+
+   len1 = norm2(a1)
+   u_hat = a1 / len1
+   b1 = (twopi / len1) * u_hat
+
+   gcut = 12.0_wp * alpha
+   rep1 = min(40, max(2, ceiling(gcut * len1 / twopi)))
+
+   ntr = 2 * rep1
+   allocate(trans(3, ntr))
+   idx = 0
+   do i1 = -rep1, rep1
+      if (i1 == 0) cycle
+      idx = idx + 1
+      trans(:, idx) = real(i1, wp) * b1
+   end do
+
+end subroutine get_ewald_rec_trans_1d
+
+
+!> Evaluate 1D zero-mode functions f0(u), f1(u), f2(u) for u = alpha^2 * rho^2 >= 0
+pure subroutine fast_f012_1d(u, f0, f1, f2)
+   !> Non-negative scalar argument u = alpha^2 * rho^2
+   real(wp), intent(in) :: u
+   !> Zero-mode potential function f0(u) = gamma_E + E1(u) + ln(u)
+   real(wp), intent(out) :: f0
+   !> First derivative f1(u) = f0'(u) = (1 - exp(-u)) / u
+   real(wp), intent(out) :: f1
+   !> Second derivative f2(u) = f0''(u) = ((u + 1)*exp(-u) - 1) / u^2
+   real(wp), intent(out) :: f2
+
+   real(wp) :: term, cf, e1_val, exp_u
+   integer :: n, k
+
+   if (u <= 0.0_wp) then
+      f0 = 0.0_wp
+      f1 = 1.0_wp
+      f2 = -0.5_wp
+      return
+   end if
+
+   if (u <= 4.0_wp) then
+      f0 = 0.0_wp
+      term = u
+      do n = 1, 35
+         f0 = f0 + term / real(n, wp)
+         term = -term * u / real(n + 1, wp)
+      end do
+   else
+      cf = 0.0_wp
+      do k = 40, 1, -1
+         cf = -real(k * k, wp) / (u + real(2 * k + 1, wp) + cf)
+      end do
+      e1_val = exp(-u) / (u + 1.0_wp + cf)
+      f0 = euler_gamma + e1_val + log(u)
+   end if
+
+   if (u <= 0.5_wp) then
+      f1 = 0.0_wp
+      f2 = 0.0_wp
+      term = 1.0_wp
+      do n = 0, 19
+         f1 = f1 + term / real(n + 1, wp)
+         f2 = f2 - term / real(n + 2, wp)
+         term = -term * u / real(n + 1, wp)
+      end do
+   else
+      exp_u = exp(-u)
+      f1 = (1.0_wp - exp_u) / u
+      f2 = ((u + 1.0_wp) * exp_u - 1.0_wp) / (u * u)
+   end if
+
+end subroutine fast_f012_1d
+
+
+!> Evaluate incomplete Bessel/exponential integrals K0(x, y), K1(x, y), K2(x, y)
+!> using composite 16-point Gauss-Legendre quadrature in w = ln(t).
+pure subroutine fast_k012_1d(x, y, k0, k1, k2)
+   !> Positive reciprocal argument x = G^2 / (4 * alpha^2)
+   real(wp), intent(in) :: x
+   !> Non-negative radial argument y = alpha^2 * rho^2
+   real(wp), intent(in) :: y
+   !> Integral K0(x, y)
+   real(wp), intent(out) :: k0
+   !> Integral K1(x, y) = -dK0/dy
+   real(wp), intent(out) :: k1
+   !> Integral K2(x, y) = d^2K0/dy^2
+   real(wp), intent(out) :: k2
+
+   real(wp) :: w0, psi_min, w_max, s0, s1, s2
+
+   if (y > x) then
+      w0 = 0.5_wp * log(y / x)
+      psi_min = 2.0_wp * sqrt(x * y)
+   else
+      w0 = 0.0_wp
+      psi_min = x + y
+   end if
+
+   if (psi_min > 700.0_wp) then
+      k0 = 0.0_wp
+      k1 = 0.0_wp
+      k2 = 0.0_wp
+      return
+   end if
+
+   w_max = log((psi_min + 42.0_wp) / x)
+   if (w_max <= 0.0_wp) then
+      k0 = 0.0_wp
+      k1 = 0.0_wp
+      k2 = 0.0_wp
+      return
+   end if
+
+   if (w0 > 0.0_wp .and. w0 < w_max) then
+      call integrate_k012_interval(x, y, 0.0_wp, w0, k0, k1, k2)
+      call integrate_k012_interval(x, y, w0, w_max, s0, s1, s2)
+      k0 = k0 + s0
+      k1 = k1 + s1
+      k2 = k2 + s2
+   else
+      call integrate_k012_interval(x, y, 0.0_wp, w_max, k0, k1, k2)
+   end if
+
+end subroutine fast_k012_1d
+
+
+!> Composite 16-point Gauss-Legendre quadrature of exp(-x*exp(w) - y*exp(-w)) on [a_start, b_end]
+pure subroutine integrate_k012_interval(x, y, a_start, b_end, s0, s1, s2)
+   !> Positive reciprocal argument x
+   real(wp), intent(in) :: x
+   !> Non-negative radial argument y
+   real(wp), intent(in) :: y
+   !> Lower integration bound in w = ln(t)
+   real(wp), intent(in) :: a_start
+   !> Upper integration bound in w = ln(t)
+   real(wp), intent(in) :: b_end
+   !> Accumulated K0 contribution
+   real(wp), intent(out) :: s0
+   !> Accumulated K1 contribution
+   real(wp), intent(out) :: s1
+   !> Accumulated K2 contribution
+   real(wp), intent(out) :: s2
+
+   integer :: n_sub, isub, q
+   real(wp) :: h, a_sub, wt, w, ew, emw, val
+
+   n_sub = max(1, ceiling((b_end - a_start) / 0.5_wp))
+   h = (b_end - a_start) / real(n_sub, wp)
+   s0 = 0.0_wp
+   s1 = 0.0_wp
+   s2 = 0.0_wp
+
+   do isub = 0, n_sub - 1
+      a_sub = a_start + real(isub, wp) * h
+      do q = 1, 8
+         wt = 0.5_wp * h * gl16_w(q)
+
+         w = a_sub + 0.5_wp * h * (1.0_wp - gl16_x(q))
+         ew = exp(w)
+         emw = 1.0_wp / ew
+         val = wt * exp(-x * ew - y * emw)
+         s0 = s0 + val
+         s1 = s1 + val * emw
+         s2 = s2 + val * emw * emw
+
+         w = a_sub + 0.5_wp * h * (1.0_wp + gl16_x(q))
+         ew = exp(w)
+         emw = 1.0_wp / ew
+         val = wt * exp(-x * ew - y * emw)
+         s0 = s0 + val
+         s1 = s1 + val * emw
+         s2 = s2 + val * emw * emw
+      end do
+   end do
+
+end subroutine integrate_k012_interval
 
 
 !> Get optimal alpha-parameter for the Ewald summation by finding alpha, where
