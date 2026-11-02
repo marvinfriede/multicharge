@@ -29,10 +29,12 @@ module multicharge_model_eeq
    use mctc_ncoord, only: new_ncoord, cn_count
    use mctc_wignerseitz, only: wignerseitz_cell
    use multicharge_blas, only: gemm
-   use multicharge_ewald, only: get_alpha
+   use multicharge_ewald, only: get_alpha, erfc_exp_2d, &
+      & get_ewald_dir_trans_2d, get_ewald_rec_trans_2d
    use multicharge_model_cache, only: cache_container, model_cache
    use multicharge_model_hessian, only: coulomb_kernel, radial_hessian, add_pair_hessian, add_pair_block
-   use multicharge_model_type, only: mchrg_model_type, get_dir_trans, get_rec_trans, init_wignerseitz_cell
+   use multicharge_model_type, only: mchrg_model_type, get_dir_trans, get_rec_trans, &
+      & init_wignerseitz_cell, get_periodic_axes
    implicit none
    private
 
@@ -123,7 +125,7 @@ subroutine update(self, mol, cache, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL)
    if (any(mol%periodic)) then
       ! Create WSC
       call init_wignerseitz_cell(ptr%wsc, mol)
-      call get_alpha(mol%lattice, ptr%alpha)
+      call get_alpha(mol%lattice, ptr%alpha, mol%periodic)
    end if
 
 end subroutine update
@@ -204,8 +206,8 @@ subroutine add_model_hessian(self, mol, error, cache, adj, hessian)
       call fatal_error(error, "Incompatible EEQ response cache")
       return
    end if
-   if (any(mol%periodic) .and. .not. all(mol%periodic)) then
-      call fatal_error(error, "Analytical charge Hessian requires molecular or 3D periodic boundary conditions")
+   if (count(mol%periodic) == 1) then
+      call fatal_error(error, "Analytical charge Hessian for 1D EEQ is not yet implemented")
       return
    end if
    nat = mol%nat
@@ -223,9 +225,12 @@ subroutine add_model_hessian(self, mol, error, cache, adj, hessian)
    call gemm(work, dcndr, hessian, transb="t", beta=1.0_wp)
 
    allocate(diagonal(3, 3, nat), source=0.0_wp)
-   if (any(mol%periodic)) then
+   select case (count(mol%periodic))
+   case (3)
       call add_periodic_hessian(self, mol, ptr%wsc, ptr%alpha, cache%qvec, adj, hessian, diagonal)
-   else
+   case (2)
+      call add_periodic_hessian_2d(self, mol, ptr%wsc, ptr%alpha, cache%qvec, adj, hessian, diagonal)
+   case (0)
       npair = nat*(nat+1)/2
       !$omp parallel do default(none) schedule(runtime) &
       !$omp shared(self, mol, cache, adj, hessian, npair) &
@@ -246,7 +251,7 @@ subroutine add_model_hessian(self, mol, error, cache, adj, hessian)
          call add_pair_hessian(iat, jat, vec, weight*dr, weight*drr, hessian, diagonal)
       end do
       !$omp end parallel do
-   end if
+   end select
 
    !$omp parallel do default(none) schedule(static) shared(nat, hessian, diagonal) private(ii)
    do iat = 1, nat
@@ -314,6 +319,89 @@ subroutine add_periodic_hessian(self, mol, wsc, alpha, qvec, adj, hessian, diago
 end subroutine add_periodic_hessian
 
 
+!> Curvature of the 2D Ewald sum and WS average at fixed lattice and alpha.
+subroutine add_periodic_hessian_2d(self, mol, wsc, alpha, qvec, adj, hessian, diagonal)
+   class(eeq_model), intent(in) :: self
+   type(structure_type), intent(in) :: mol
+   type(wignerseitz_cell), intent(in) :: wsc
+   real(wp), intent(in) :: alpha, qvec(:), adj(:)
+   real(wp), intent(inout) :: hessian(:, :)
+   real(wp), intent(inout) :: diagonal(:, :, :)
+
+   integer :: iat, jat, izp, jzp, img, itr, ipair, npair, ndim, p_axes(3)
+   real(wp) :: rij(3), vec(3), g_vec(3), box(3, 3), gam, gam_min, r, weight, wsw
+   real(wp) :: val, dr, drr, ar, arr, area, n_hat(3), a1(3), a2(3)
+   real(wp) :: z, g2, g_norm, gv, cos_gv, sin_gv, ep, em, fp, fm, gauss, pref, gauss_z
+   real(wp) :: gg_mat(3, 3), nn_mat(3, 3), ng_sym(3, 3)
+   real(wp), allocatable :: dtrans(:, :), rtrans(:, :)
+
+   call get_periodic_axes(mol%periodic, ndim, p_axes)
+   a1 = mol%lattice(:, p_axes(1))
+   a2 = mol%lattice(:, p_axes(2))
+   gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
+   call get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, dtrans)
+   call get_ewald_rec_trans_2d(a1, a2, alpha, rtrans, area, n_hat)
+   nn_mat = spread(n_hat, 2, 3) * spread(n_hat, 1, 3)
+
+   npair = mol%nat*(mol%nat+1)/2
+   !$omp parallel do default(none) schedule(runtime) &
+   !$omp shared(self, mol, wsc, alpha, qvec, adj, hessian, dtrans, rtrans, area, n_hat, nn_mat, npair) &
+   !$omp private(iat, jat, izp, jzp, img, itr, rij, vec, g_vec, box, gam, r, weight, wsw) &
+   !$omp private(val, dr, drr, ar, arr, z, g2, g_norm, gv, cos_gv, sin_gv, ep, em, fp, fm) &
+   !$omp private(gauss, pref, gauss_z, gg_mat, ng_sym) &
+   !$omp reduction(+:diagonal)
+   do ipair = 1, npair
+      iat = int(0.5_wp*(sqrt(8.0_wp*real(ipair, wp)+1.0_wp)-1.0_wp))
+      if (iat*(iat+1)/2 < ipair) iat = iat+1
+      jat = ipair-iat*(iat-1)/2
+      if (iat == jat) cycle
+      izp = mol%id(iat)
+      jzp = mol%id(jat)
+      gam = 1.0_wp/sqrt(self%rad(izp)**2+self%rad(jzp)**2)
+      weight = -(adj(iat)*qvec(jat)+adj(jat)*qvec(iat))
+      wsw = 1.0_wp/real(wsc%nimg(jat, iat), wp)
+      box = 0.0_wp
+      do img = 1, wsc%nimg(jat, iat)
+         rij = mol%xyz(:, iat)-mol%xyz(:, jat)-wsc%trans(:, wsc%tridx(img, jat, iat))
+         do itr = 1, size(dtrans, 2)
+            vec = rij+dtrans(:, itr)
+            r = norm2(vec)
+            if (r < eps) cycle
+            call coulomb_kernel(r, gam, val, dr, drr)
+            call coulomb_kernel(r, alpha, val, ar, arr)
+            box = box+wsw*radial_hessian(vec, dr-ar, drr-arr)
+         end do
+         z = dot_product(rij, n_hat)
+         do itr = 1, size(rtrans, 2)
+            g_vec = rtrans(:, itr)
+            g2 = dot_product(g_vec, g_vec)
+            if (g2 < eps) cycle
+            g_norm = sqrt(g2)
+            gv = dot_product(g_vec, rij)
+            cos_gv = cos(gv)
+            sin_gv = sin(gv)
+            ep = erfc_exp_2d(g_norm, +z, alpha)
+            em = erfc_exp_2d(g_norm, -z, alpha)
+            fp = ep + em
+            fm = ep - em
+            gauss = exp(-0.25_wp * g2 / (alpha * alpha) - (alpha * z)**2)
+            pref = pi / (area * g_norm)
+            gg_mat = spread(g_vec, 2, 3) * spread(g_vec, 1, 3)
+            ng_sym = spread(g_vec, 2, 3) * spread(n_hat, 1, 3) &
+               & + spread(n_hat, 2, 3) * spread(g_vec, 1, 3)
+            box = box + wsw * (-pref * cos_gv * fp * gg_mat &
+               & - (pi / area) * sin_gv * fm * ng_sym &
+               & + (pi / area) * cos_gv * (g_norm * fp - 4.0_wp * alpha * gauss / sqrtpi) * nn_mat)
+         end do
+         gauss_z = exp(-(alpha * z)**2)
+         box = box - wsw * (4.0_wp * sqrtpi * alpha / area) * gauss_z * nn_mat
+      end do
+      call add_pair_block(iat, jat, weight*box, hessian, diagonal)
+   end do
+   !$omp end parallel do
+end subroutine add_periodic_hessian_2d
+
+
 subroutine get_coulomb_matrix(self, mol, cache, amat)
    class(eeq_model), intent(in) :: self
    type(structure_type), intent(in) :: mol
@@ -324,11 +412,16 @@ subroutine get_coulomb_matrix(self, mol, cache, amat)
 
    call view(cache, ptr)
 
-   if (any(mol%periodic)) then
+   select case (count(mol%periodic))
+   case (3)
       call get_amat_3d(self, mol, ptr%wsc, ptr%alpha, amat)
-   else
+   case (2)
+      call get_amat_2d(self, mol, ptr%wsc, ptr%alpha, amat)
+   case (1)
+      call get_amat_3d(self, mol, ptr%wsc, ptr%alpha, amat)
+   case (0)
       call get_amat_0d(self, mol, amat)
-   end if
+   end select
 end subroutine get_coulomb_matrix
 
 subroutine get_amat_0d(self, mol, amat)
@@ -446,6 +539,84 @@ subroutine get_amat_rec_3d(rij, trans, weight, amat)
    end do
 end subroutine get_amat_rec_3d
 
+!> Evaluate 2D Ewald Coulomb matrix for a slab
+subroutine get_amat_2d(self, mol, wsc, alpha, amat)
+   class(eeq_model), intent(in) :: self
+   type(structure_type), intent(in) :: mol
+   type(wignerseitz_cell), intent(in) :: wsc
+   real(wp), intent(in) :: alpha
+   real(wp), intent(out) :: amat(:, :)
+
+   integer :: iat, jat, izp, jzp, img, ipair, npair, ndim, p_axes(3)
+   real(wp) :: vec(3), gam, gam_min, wsw, dtmp, rtmp, tmp, area, n_hat(3), a1(3), a2(3)
+   real(wp), allocatable :: dtrans(:, :), rtrans(:, :)
+
+   call get_periodic_axes(mol%periodic, ndim, p_axes)
+   a1 = mol%lattice(:, p_axes(1))
+   a2 = mol%lattice(:, p_axes(2))
+   gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
+   call get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, dtrans)
+   call get_ewald_rec_trans_2d(a1, a2, alpha, rtrans, area, n_hat)
+
+   npair = mol%nat*(mol%nat+1)/2
+   !$omp parallel do default(none) schedule(runtime) &
+   !$omp shared(amat, mol, self, wsc, dtrans, rtrans, alpha, area, n_hat, npair) &
+   !$omp private(iat, jat, izp, jzp, img, gam, wsw, vec, dtmp, rtmp, tmp)
+   do ipair = 1, npair
+      iat = int(0.5_wp*(sqrt(8.0_wp*real(ipair, wp)+1.0_wp)-1.0_wp))
+      if (iat*(iat+1)/2 < ipair) iat = iat+1
+      jat = ipair-iat*(iat-1)/2
+      izp = mol%id(iat)
+      jzp = mol%id(jat)
+      gam = 1.0_wp / sqrt(self%rad(izp)**2 + self%rad(jzp)**2)
+      if (iat == jat) then
+         vec = 0.0_wp
+         call get_amat_dir_3d(vec, gam, alpha, dtrans, dtmp)
+         call get_amat_rec_2d(vec, alpha, area, n_hat, rtrans, rtmp)
+         tmp = dtmp + rtmp + self%eta(izp) + sqrt2pi / self%rad(izp) - 2.0_wp * alpha / sqrtpi
+      else
+         wsw = 1.0_wp / real(wsc%nimg(jat, iat), wp)
+         tmp = 0.0_wp
+         do img = 1, wsc%nimg(jat, iat)
+            vec = mol%xyz(:, jat) - mol%xyz(:, iat) + wsc%trans(:, wsc%tridx(img, jat, iat))
+            call get_amat_dir_3d(vec, gam, alpha, dtrans, dtmp)
+            call get_amat_rec_2d(vec, alpha, area, n_hat, rtrans, rtmp)
+            tmp = tmp + (dtmp + rtmp) * wsw
+         end do
+      end if
+      amat(jat, iat) = tmp
+      amat(iat, jat) = tmp
+   end do
+   !$omp end parallel do
+
+   amat(mol%nat + 1, 1:mol%nat + 1) = 1.0_wp
+   amat(1:mol%nat + 1, mol%nat + 1) = 1.0_wp
+   amat(mol%nat + 1, mol%nat + 1) = 0.0_wp
+end subroutine get_amat_2d
+
+!> Reciprocal-space and G=0 sheet contribution for 2D Ewald
+pure subroutine get_amat_rec_2d(rij, alpha, area, n_hat, trans, amat)
+   real(wp), intent(in) :: rij(3), alpha, area, n_hat(3), trans(:, :)
+   real(wp), intent(out) :: amat
+
+   integer :: itr
+   real(wp) :: z, g_vec(3), g_norm, gv, ep, em
+
+   z = dot_product(rij, n_hat)
+   amat = 0.0_wp
+   do itr = 1, size(trans, 2)
+      g_vec = trans(:, itr)
+      g_norm = norm2(g_vec)
+      if (g_norm < eps) cycle
+      gv = dot_product(rij, g_vec)
+      ep = erfc_exp_2d(g_norm, +z, alpha)
+      em = erfc_exp_2d(g_norm, -z, alpha)
+      amat = amat + (pi / (area * g_norm)) * cos(gv) * (ep + em)
+   end do
+   amat = amat - (2.0_wp * pi / area) &
+      & * (z * erf(alpha * z) + exp(-(alpha * z)**2) / (alpha * sqrtpi))
+end subroutine get_amat_rec_2d
+
 subroutine get_coulomb_derivs(self, mol, cache, qvec, dadr, dadL, atrace)
    class(eeq_model), intent(in) :: self
    type(structure_type), intent(in) :: mol
@@ -457,11 +628,16 @@ subroutine get_coulomb_derivs(self, mol, cache, qvec, dadr, dadL, atrace)
 
    call view(cache, ptr)
 
-   if (any(mol%periodic)) then
+   select case (count(mol%periodic))
+   case (3)
       call get_damat_3d(self, mol, ptr%wsc, ptr%alpha, qvec, dadr, dadL, atrace)
-   else
+   case (2)
+      call get_damat_2d(self, mol, ptr%wsc, ptr%alpha, qvec, dadr, dadL, atrace)
+   case (1)
+      call get_damat_3d(self, mol, ptr%wsc, ptr%alpha, qvec, dadr, dadL, atrace)
+   case (0)
       call get_damat_0d(self, mol, qvec, dadr, dadL, atrace)
-   end if
+   end select
 end subroutine get_coulomb_derivs
 
 subroutine get_damat_0d(self, mol, qvec, dadr, dadL, atrace)
@@ -617,6 +793,131 @@ subroutine get_damat_rec_3d(rij, trans, weight, strain, dg, ds)
       ds(:, :) = ds + cos(gv) * strain(:, :, itr)
    end do
 end subroutine get_damat_rec_3d
+
+subroutine get_damat_2d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace)
+   class(eeq_model), intent(in) :: self
+   type(structure_type), intent(in) :: mol
+   type(wignerseitz_cell), intent(in) :: wsc
+   real(wp), intent(in) :: alpha, qvec(:)
+   real(wp), intent(out) :: dadr(:, :, :), dadL(:, :, :), atrace(:, :)
+
+   integer :: iat, jat, izp, jzp, img, ipair, npair, idir, ip
+   real(wp) :: gam, gam_min, wsw, vec(3), dG(3), dS(3, 3)
+   real(wp) :: dGd(3), dSd(3, 3), dGr(3), dSr(3, 3)
+   real(wp) :: a1(3), a2(3), area, n_hat(3)
+   real(wp), allocatable :: dtrans(:, :), rtrans(:, :)
+
+   atrace(:, :) = 0.0_wp
+   dadL(:, :, :) = 0.0_wp
+   ip = 0
+   do idir = 1, 3
+      if (mol%periodic(idir)) then
+         ip = ip + 1
+         if (ip == 1) a1 = mol%lattice(:, idir)
+         if (ip == 2) a2 = mol%lattice(:, idir)
+      end if
+   end do
+   gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
+   call get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, dtrans)
+   call get_ewald_rec_trans_2d(a1, a2, alpha, rtrans, area, n_hat)
+
+   npair = mol%nat*(mol%nat+1)/2
+   !$omp parallel default(none) &
+   !$omp shared(mol, self, wsc, alpha, area, n_hat, dtrans, rtrans, qvec, dadr, npair) &
+   !$omp private(iat, jat, izp, jzp, img, ipair, gam, wsw, vec, dG, dS, dGr, dSr, dGd, dSd) &
+   !$omp reduction(+:atrace, dadL)
+   !$omp do schedule(static)
+   do iat = 1, size(dadr, 3)
+      dadr(:, :, iat) = 0.0_wp
+   end do
+   !$omp end do
+   !$omp do schedule(runtime)
+   do ipair = 1, npair
+      iat = int(0.5_wp*(sqrt(8.0_wp*real(ipair, wp)+1.0_wp)-1.0_wp))
+      if (iat*(iat+1)/2 < ipair) iat = iat+1
+      jat = ipair-iat*(iat-1)/2
+      izp = mol%id(iat)
+      jzp = mol%id(jat)
+      dG(:) = 0.0_wp
+      dS(:, :) = 0.0_wp
+      gam = 1.0_wp / sqrt(self%rad(izp)**2 + self%rad(jzp)**2)
+      if (iat == jat) then
+         vec = 0.0_wp
+         call get_damat_dir_3d(vec, gam, alpha, dtrans, dGd, dSd)
+         call get_damat_rec_2d(vec, alpha, area, n_hat, rtrans, dGr, dSr)
+         dS = dSd + dSr
+         dadL(:, :, iat) = dadL(:, :, iat) + dS * qvec(iat)
+      else
+         wsw = 1.0_wp / real(wsc%nimg(jat, iat), wp)
+         do img = 1, wsc%nimg(jat, iat)
+            vec = mol%xyz(:, jat) - mol%xyz(:, iat) + wsc%trans(:, wsc%tridx(img, jat, iat))
+            call get_damat_dir_3d(vec, gam, alpha, dtrans, dGd, dSd)
+            call get_damat_rec_2d(vec, alpha, area, n_hat, rtrans, dGr, dSr)
+            dG = dG + (dGd + dGr) * wsw
+            dS = dS + (dSd + dSr) * wsw
+         end do
+         atrace(:, iat) = atrace(:, iat) - dG * qvec(jat)
+         atrace(:, jat) = atrace(:, jat) + dG * qvec(iat)
+         dadr(:, iat, jat) = -dG * qvec(iat)
+         dadr(:, jat, iat) = +dG * qvec(jat)
+         dadL(:, :, jat) = dadL(:, :, jat) + dS * qvec(iat)
+         dadL(:, :, iat) = dadL(:, :, iat) + dS * qvec(jat)
+      end if
+   end do
+   !$omp end do
+   !$omp end parallel
+end subroutine get_damat_2d
+
+subroutine get_damat_rec_2d(rij, alpha, area, n_hat, trans, dg, ds)
+   real(wp), intent(in) :: rij(3), alpha, area, n_hat(3), trans(:, :)
+   real(wp), intent(out) :: dg(3), ds(3, 3)
+
+   integer :: itr
+   real(wp) :: z, r_perp(3), g_vec(3), g_norm, gv, cos_gv, sin_gv
+   real(wp) :: ep, em, f_gz, df_dg, df_dz, pref, phi_0, dphi0_dz
+   real(wp) :: i_par(3, 3), nn(3, 3), outer_gg(3, 3), outer_rg(3, 3)
+   real(wp), parameter :: unity(3, 3) = reshape(&
+      & [1, 0, 0, 0, 1, 0, 0, 0, 1], [3, 3])
+
+   dg(:) = 0.0_wp
+   ds(:, :) = 0.0_wp
+
+   z = dot_product(rij, n_hat)
+   r_perp = z * n_hat
+   nn = spread(n_hat, 1, 3) * spread(n_hat, 2, 3)
+   i_par = unity - nn
+
+   do itr = 1, size(trans, 2)
+      g_vec = trans(:, itr)
+      g_norm = norm2(g_vec)
+      if (g_norm < eps) cycle
+      gv = dot_product(rij, g_vec)
+      cos_gv = cos(gv)
+      sin_gv = sin(gv)
+      ep = erfc_exp_2d(g_norm, +z, alpha)
+      em = erfc_exp_2d(g_norm, -z, alpha)
+      f_gz = ep + em
+      df_dg = z * (ep - em) - (2.0_wp / (alpha * sqrtpi)) &
+         & * exp(-g_norm**2 / (4.0_wp * alpha**2) - alpha**2 * z**2)
+      df_dz = g_norm * (ep - em)
+      pref = pi / (area * g_norm)
+
+      dg(:) = dg + pref * (-sin_gv * f_gz * g_vec + cos_gv * df_dz * n_hat)
+
+      outer_gg = spread(g_vec, 1, 3) * spread(g_vec, 2, 3)
+      outer_rg = spread(r_perp, 1, 3) * spread(g_vec, 2, 3) &
+         & + spread(g_vec, 1, 3) * spread(r_perp, 2, 3)
+      ds(:, :) = ds + pref * cos_gv * (-f_gz * i_par &
+         & + ((f_gz / g_norm - df_dg) / g_norm) * outer_gg + z * df_dz * nn) &
+         & - pref * sin_gv * f_gz * outer_rg
+   end do
+
+   phi_0 = -(2.0_wp * pi / area) &
+      & * (z * erf(alpha * z) + exp(-(alpha * z)**2) / (alpha * sqrtpi))
+   dphi0_dz = -(2.0_wp * pi / area) * erf(alpha * z)
+   dg(:) = dg + dphi0_dz * n_hat
+   ds(:, :) = ds - phi_0 * i_par + dphi0_dz * z * nn
+end subroutine get_damat_rec_2d
 
 !> Reciprocal-space factors independent of the atom pair.
 !> Prepare once for each matrix/response evaluation, including strain when needed.

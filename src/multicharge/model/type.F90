@@ -457,6 +457,14 @@ subroutine solve(self, mol, error, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL, &
 
    call check_structure(mol, error)
    if (allocated(error)) return
+   if (.not. allocated(self%ncoord_en) .and. allocated(mol%periodic)) then
+      if ((count(mol%periodic) == 1 .or. count(mol%periodic) == 2) &
+         & .and. abs(mol%charge) > 1.0e-10_wp) then
+         call fatal_error(error, &
+            & "Charged 1D/2D periodic unit cells are not supported by EEQ; use EEQBC instead")
+         return
+      end if
+   end if
 
    cache => local_cache
    if (present(response)) then
@@ -588,6 +596,14 @@ subroutine add_charge_hessian(self, mol, error, weights, hessian, cache)
    nat = mol%nat
    call check_structure(mol, error)
    if (allocated(error)) return
+   if (.not. allocated(self%ncoord_en) .and. allocated(mol%periodic)) then
+      if ((count(mol%periodic) == 1 .or. count(mol%periodic) == 2) &
+         & .and. abs(mol%charge) > 1.0e-10_wp) then
+         call fatal_error(error, &
+            & "Charged 1D/2D periodic unit cells are not supported by EEQ; use EEQBC instead")
+         return
+      end if
+   end if
    if (size(weights) /= nat .or. any(shape(hessian) /= 3*nat)) then
       call fatal_error(error, "Invalid dimensions for charge Hessian contraction")
       return

@@ -63,6 +63,7 @@ subroutine collect_pbc(testsuite)
       & new_unittest("eeqbc-dqdL-oxacb", test_eeqbc_dqdL_oxacb), &
       & new_unittest("eeqbc-1d-all-masks", test_eeqbc_1d_all_masks), &
       & new_unittest("eeqbc-2d-all-masks", test_eeqbc_2d_all_masks), &
+      & new_unittest("eeq-2d-all-masks", test_eeq_2d_all_masks), &
       & new_unittest("degenerate-lattice-error", test_degenerate_lattice_error) &
       & ]
 
@@ -1339,5 +1340,103 @@ subroutine test_degenerate_lattice_error(error)
    end if
    deallocate(expected)
 end subroutine test_degenerate_lattice_error
+
+subroutine test_eeq_2d_all_masks(error)
+   type(error_type), allocatable, intent(out) :: error
+   type(error_type), allocatable :: expected
+   type(structure_type) :: mol, mol_big
+   class(mchrg_model_type), allocatable :: model
+   real(wp) :: xyz(3, 3), a1(3), a2(3), lat1(3, 3), lat2(3, 3)
+   real(wp) :: q1(3), q2(3), q_ref(3), dqdr1(3, 3, 3), dqdr2(3, 3, 3)
+   real(wp) :: dqdL1(3, 3, 3), dqdL2(3, 3, 3)
+   logical :: masks(3, 3)
+   integer :: imask, p1, p2, np
+
+   xyz = reshape([ &
+      & 0.0_wp, 0.0_wp, -0.3_wp, &
+      & 2.5_wp, 0.2_wp, 0.5_wp, &
+      & 0.6_wp, 2.1_wp, 0.4_wp], [3, 3])
+   a1 = [5.2_wp, 0.3_wp, 0.1_wp]
+   a2 = [0.5_wp, 6.1_wp, -0.2_wp]
+   masks = reshape([ &
+      & .true., .true., .false., &
+      & .true., .false., .true., &
+      & .false., .true., .true.], [3, 3])
+
+   do imask = 1, 3
+      select case (imask)
+      case (1); p1 = 1; p2 = 2; np = 3
+      case (2); p1 = 1; p2 = 3; np = 2
+      case (3); p1 = 2; p2 = 3; np = 1
+      end select
+      lat1 = 0.0_wp
+      lat1(:, p1) = a1
+      lat1(:, p2) = a2
+      lat1(:, np) = [0.0_wp, 0.0_wp, 20.0_wp]
+
+      lat2 = 0.0_wp
+      lat2(:, p1) = a1
+      lat2(:, p2) = a2
+      lat2(:, np) = [35.0_wp, -70.0_wp, 200.0_wp]
+
+      call new(mol, [30, 8, 1], xyz, charge=0.0_wp, &
+         & lattice=lat1, periodic=masks(:, imask))
+      call new(mol_big, [30, 8, 1], xyz, charge=0.0_wp, &
+         & lattice=lat2, periodic=masks(:, imask))
+
+      call new_eeq2019_model(mol, model, error)
+      if (allocated(error)) return
+
+      call get_charges(model, mol, error, q1, dqdr1, dqdL1)
+      if (allocated(error)) return
+      call get_charges(model, mol_big, error, q2, dqdr2, dqdL2)
+      if (allocated(error)) return
+
+      if (abs(sum(q1)) > thr) then
+         call test_failed(error, "2D EEQ total charge constraint violated")
+         return
+      end if
+      if (maxval(abs(q1 - q2)) > thr .or. maxval(abs(dqdr1 - dqdr2)) > thr &
+         & .or. maxval(abs(dqdL1 - dqdL2)) > thr) then
+         call test_failed(error, "2D EEQ depends on nonperiodic lattice vector")
+         return
+      end if
+      if (imask == 1) then
+         q_ref = q1
+      else if (maxval(abs(q1 - q_ref)) > thr) then
+         call test_failed(error, "2D EEQ charges depend on periodic mask index")
+         return
+      end if
+
+      ! Full derivative validation for TTF and TFT
+      if (imask <= 2) then
+         call test_dbdr(error, mol, model)
+         if (allocated(error)) return
+         call test_dbdL(error, mol, model)
+         if (allocated(error)) return
+         call test_dadr(error, mol, model)
+         if (allocated(error)) return
+         call test_dadL(error, mol, model)
+         if (allocated(error)) return
+         call test_numgrad(error, mol, model)
+         if (allocated(error)) return
+         call test_numsigma(error, mol, model)
+         if (allocated(error)) return
+         call test_numdqdr(error, mol, model)
+         if (allocated(error)) return
+         call test_numdqdL(error, mol, model)
+         if (allocated(error)) return
+      end if
+   end do
+
+   ! Charged 2D EEQ cell must be explicitly rejected
+   mol%charge = 1.0_wp
+   call get_charges(model, mol, expected, q1)
+   if (.not. allocated(expected)) then
+      call test_failed(error, "Charged 2D EEQ cell was not rejected")
+      return
+   end if
+   deallocate(expected)
+end subroutine test_eeq_2d_all_masks
 
 end module test_pbc

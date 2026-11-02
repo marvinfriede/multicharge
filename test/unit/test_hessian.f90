@@ -68,12 +68,16 @@ subroutine test_eeq_periodic(error)
       call run_case(error, .false., icase)
       if (allocated(error)) return
    end do
+   do icase = 13, 14
+      call run_case(error, .false., icase)
+      if (allocated(error)) return
+   end do
 end subroutine test_eeq_periodic
 
 subroutine test_eeqbc_periodic(error)
    type(error_type), allocatable, intent(out) :: error
    integer :: icase
-   do icase = 5, 12
+   do icase = 5, 14
       call run_case(error, .true., icase)
       if (allocated(error)) return
    end do
@@ -146,6 +150,22 @@ subroutine run_case(error, bond_capacity, icase)
          & 6.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, &
          & 0.0_wp, 0.0_wp, 0.0_wp], [3, 3])
       mol%periodic = [.true., .false., .false.]
+   case(13)
+      ! 2D periodic slab (TFT), neutral, zero nonperiodic lattice vector
+      call new(mol, [30, 8, 1], reshape([ &
+         & 0.0_wp, -0.3_wp, 0.0_wp, 2.5_wp, 0.4_wp, 0.2_wp, &
+         & 0.6_wp, 0.5_wp, 2.1_wp], [3, 3]), charge=0.0_wp)
+      mol%lattice = reshape([5.2_wp, 0.1_wp, 0.3_wp, 0.0_wp, 0.0_wp, 0.0_wp, &
+         & 0.5_wp, -0.2_wp, 6.1_wp], [3, 3])
+      mol%periodic = [.true., .false., .true.]
+   case(14)
+      ! 2D periodic slab (TTF) with half-cell displacement (competing WSC images)
+      call new(mol, [8, 1], reshape([0.0_wp, 0.0_wp, -0.2_wp, &
+         & 3.0_wp, 0.2_wp, 0.3_wp], [3, 2]), charge=0.0_wp)
+      mol%lattice = reshape([ &
+         & 6.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 7.0_wp, 0.0_wp, &
+         & 0.0_wp, 0.0_wp, 0.0_wp], [3, 3])
+      mol%periodic = [.true., .true., .false.]
    case default
       call test_failed(error, "Unknown charge Hessian test case")
       return
