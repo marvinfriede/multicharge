@@ -22,18 +22,17 @@
 !> and S. Grimme, *J. Chem. Phys.*, **2019**, 150, 154122.
 !> DOI: [10.1063/1.5090222](https://dx.doi.org/10.1063/1.5090222)
 module multicharge_model_eeq
-   use mctc_cutoff, only: get_lattice_points
    use mctc_env, only: error_type, fatal_error, wp
    use mctc_io, only: structure_type
    use mctc_io_constants, only: pi
    use mctc_io_math, only: matdet_3x3
    use mctc_ncoord, only: new_ncoord, cn_count
-   use mctc_wignerseitz, only: wignerseitz_cell, new_wignerseitz_cell
+   use mctc_wignerseitz, only: wignerseitz_cell
    use multicharge_blas, only: gemm
    use multicharge_ewald, only: get_alpha
    use multicharge_model_cache, only: cache_container, model_cache
    use multicharge_model_hessian, only: coulomb_kernel, radial_hessian, add_pair_hessian, add_pair_block
-   use multicharge_model_type, only: mchrg_model_type, get_dir_trans, get_rec_trans
+   use multicharge_model_type, only: mchrg_model_type, get_dir_trans, get_rec_trans, init_wignerseitz_cell
    implicit none
    private
 
@@ -123,7 +122,7 @@ subroutine update(self, mol, cache, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL)
 
    if (any(mol%periodic)) then
       ! Create WSC
-      call new_wignerseitz_cell(ptr%wsc, mol)
+      call init_wignerseitz_cell(ptr%wsc, mol)
       call get_alpha(mol%lattice, ptr%alpha)
    end if
 
@@ -205,6 +204,10 @@ subroutine add_model_hessian(self, mol, error, cache, adj, hessian)
       call fatal_error(error, "Incompatible EEQ response cache")
       return
    end if
+   if (any(mol%periodic) .and. .not. all(mol%periodic)) then
+      call fatal_error(error, "Analytical charge Hessian requires molecular or 3D periodic boundary conditions")
+      return
+   end if
    nat = mol%nat
    allocate(dEdcn(nat), work(3*nat, nat))
    dcndr = reshape(ptr%dcndr, [3*nat, nat])
@@ -215,7 +218,7 @@ subroutine add_model_hessian(self, mol, error, cache, adj, hessian)
       weight = -adj(iat)*self%kcnchi(izp)*(0.25_wp*c+reg)/(c+reg)**2.5_wp
       work(:, iat) = weight*dcndr(:, iat)
    end do
-   call get_lattice_points(mol%periodic, mol%lattice, self%ncoord%cutoff, trans)
+   call get_dir_trans(mol, trans, self%ncoord%cutoff)
    call self%ncoord%add_coordination_number_hessian(mol, trans, dEdcn, hessian)
    call gemm(work, dcndr, hessian, transb="t", beta=1.0_wp)
 

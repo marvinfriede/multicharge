@@ -14,15 +14,16 @@
 ! limitations under the License.
 
 module test_pbc
-   use mctc_cutoff, only: get_lattice_points
    use mctc_env, only: wp
    use mctc_env_testing, only: new_unittest, unittest_type, error_type, &
       & test_failed
    use mctc_io_structure, only: structure_type, new
    use mstore, only: get_structure
+   use multicharge, only: get_charges
    use multicharge_model, only: mchrg_model_type
    use multicharge_model_cache, only: cache_container
    use multicharge_model_eeqbc, only: eeqbc_model
+   use multicharge_model_type, only: get_dir_trans
    use multicharge_param, only: new_eeq2019_model, new_eeqbc2025_model
    implicit none
    private
@@ -59,7 +60,10 @@ subroutine collect_pbc(testsuite)
       & new_unittest("eeqbc-gradient-co2", test_eeqbc_g_co2), &
       & new_unittest("eeqbc-sigma-ice", test_eeqbc_s_ice), &
       & new_unittest("eeqbc-dqdr-urea", test_eeqbc_dqdr_urea), &
-      & new_unittest("eeqbc-dqdL-oxacb", test_eeqbc_dqdL_oxacb) &
+      & new_unittest("eeqbc-dqdL-oxacb", test_eeqbc_dqdL_oxacb), &
+      & new_unittest("eeqbc-1d-all-masks", test_eeqbc_1d_all_masks), &
+      & new_unittest("eeqbc-2d-all-masks", test_eeqbc_2d_all_masks), &
+      & new_unittest("degenerate-lattice-error", test_degenerate_lattice_error) &
       & ]
 
 end subroutine collect_pbc
@@ -106,7 +110,7 @@ subroutine gen_test(error, mol, model, qref, eref)
    real(wp), allocatable :: energy(:)
    real(wp), allocatable :: qvec(:)
 
-   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
+   call get_dir_trans(mol, trans, cutoff)
 
    allocate(cn(mol%nat), qloc(mol%nat))
 
@@ -171,7 +175,7 @@ subroutine test_numgrad(error, mol, model)
    real(wp), allocatable :: numgrad(:, :)
    real(wp) :: er, el
 
-   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
+   call get_dir_trans(mol, trans, cutoff)
 
    allocate(cn(mol%nat), dcndr(3, mol%nat, mol%nat), dcndL(3, 3, mol%nat), &
       & qloc(mol%nat), dqlocdr(3, mol%nat, mol%nat), dqlocdL(3, 3, mol%nat), &
@@ -247,7 +251,7 @@ subroutine test_numsigma(error, mol, model)
    real(wp), allocatable :: lattr(:, :), xyz(:, :)
    real(wp) :: er, el, eps(3, 3), numsigma(3, 3), sigma(3, 3), lattice(3, 3)
 
-   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
+   call get_dir_trans(mol, trans, cutoff)
 
    allocate(cn(mol%nat), dcndr(3, mol%nat, mol%nat), dcndL(3, 3, mol%nat), &
       & qloc(mol%nat), dqlocdr(3, mol%nat, mol%nat), dqlocdL(3, 3, mol%nat), &
@@ -334,7 +338,7 @@ subroutine test_dbdr(error, mol, model)
    type(cache_container), allocatable :: cache
    allocate(cache)
 
-   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
+   call get_dir_trans(mol, trans, cutoff)
 
    allocate(cn(mol%nat), dcndr(3, mol%nat, mol%nat), dcndL(3, 3, mol%nat), &
       & qloc(mol%nat), dqlocdr(3, mol%nat, mol%nat), dqlocdL(3, 3, mol%nat), &
@@ -415,7 +419,7 @@ subroutine test_dbdL(error, mol, model)
       & xvecr(mol%nat + 1), xvecl(mol%nat + 1), numsigma(3, 3, mol%nat + 1), &
       & dbdr(3, mol%nat, mol%nat + 1), dbdL(3, 3, mol%nat + 1), xyz(3, mol%nat))
 
-   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
+   call get_dir_trans(mol, trans, cutoff)
 
    numsigma = 0.0_wp
 
@@ -513,7 +517,7 @@ subroutine test_dadr(error, mol, model)
       thr2_local = thr2
    end select
 
-   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
+   call get_dir_trans(mol, trans, cutoff)
 
    ! Obtain the vector of charges
    call model%ncoord%get_coordination_number(mol, trans, cn)
@@ -608,7 +612,7 @@ subroutine test_dadL(error, mol, model)
       & dadr(3, mol%nat, mol%nat + 1), dadL(3, 3, mol%nat + 1), atrace(3, mol%nat), &
       & numsigma(3, 3, mol%nat + 1), qvec(mol%nat), xyz(3, mol%nat))
 
-   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
+   call get_dir_trans(mol, trans, cutoff)
 
    call model%ncoord%get_coordination_number(mol, trans, cn)
    call model%local_charge(mol, trans, qloc)
@@ -695,7 +699,7 @@ subroutine test_numdqdr(error, mol, model)
    real(wp), allocatable :: ql(:), qr(:), dqdr(:, :, :), dqdL(:, :, :)
    real(wp), allocatable :: numdr(:, :, :)
 
-   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
+   call get_dir_trans(mol, trans, cutoff)
 
    allocate(cn(mol%nat), dcndr(3, mol%nat, mol%nat), dcndL(3, 3, mol%nat), &
       & qloc(mol%nat), dqlocdr(3, mol%nat, mol%nat), dqlocdL(3, 3, mol%nat), &
@@ -763,7 +767,7 @@ subroutine test_numdqdL(error, mol, model)
    real(wp), allocatable :: lattr(:, :), xyz(:, :), numdL(:, :, :)
    real(wp) :: eps(3, 3), lattice(3, 3)
 
-   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
+   call get_dir_trans(mol, trans, cutoff)
 
    allocate(cn(mol%nat), dcndr(3, mol%nat, mol%nat), dcndL(3, 3, mol%nat), &
       & qloc(mol%nat), dqlocdr(3, mol%nat, mol%nat), dqlocdL(3, 3, mol%nat), &
@@ -1118,5 +1122,222 @@ subroutine test_eeqbc_dqdL_oxacb(error)
    call test_numdqdL(error, mol, model)
 
 end subroutine test_eeqbc_dqdL_oxacb
+
+subroutine test_eeqbc_1d_all_masks(error)
+   type(error_type), allocatable, intent(out) :: error
+   type(structure_type) :: mol, mol_big
+   class(mchrg_model_type), allocatable :: model
+   real(wp) :: xyz(3, 3), a_wire(3), lat1(3, 3), lat2(3, 3)
+   real(wp) :: q1(3), q2(3), q_ref(3), dqdr1(3, 3, 3), dqdr2(3, 3, 3)
+   real(wp) :: dqdL1(3, 3, 3), dqdL2(3, 3, 3)
+   logical :: masks(3, 3)
+   integer :: imask, iq
+   real(wp) :: charges(2)
+
+   xyz = reshape([ &
+      & 0.0_wp, 0.0_wp, 0.0_wp, &
+      & 2.4_wp, 0.3_wp, -0.4_wp, &
+      & 1.1_wp, 1.8_wp, 0.7_wp], [3, 3])
+   a_wire = [5.3_wp, 0.6_wp, -0.5_wp]
+   masks = reshape([ &
+      & .true., .false., .false., &
+      & .false., .true., .false., &
+      & .false., .false., .true.], [3, 3])
+   charges = [0.0_wp, 1.0_wp]
+
+   do iq = 1, 2
+      do imask = 1, 3
+         lat1 = 0.0_wp
+         lat1(:, imask) = a_wire
+         ! Give nonperiodic columns arbitrary values in lat1 vs 10x larger in lat2
+         lat1(:, mod(imask, 3) + 1) = [0.0_wp, 20.0_wp, 0.0_wp]
+         lat1(:, mod(imask + 1, 3) + 1) = [0.0_wp, 0.0_wp, 20.0_wp]
+
+         lat2 = 0.0_wp
+         lat2(:, imask) = a_wire
+         lat2(:, mod(imask, 3) + 1) = [15.0_wp, 200.0_wp, -30.0_wp]
+         lat2(:, mod(imask + 1, 3) + 1) = [-40.0_wp, 10.0_wp, 250.0_wp]
+
+         call new(mol, [30, 8, 1], xyz, charge=charges(iq), &
+            & lattice=lat1, periodic=masks(:, imask))
+         call new(mol_big, [30, 8, 1], xyz, charge=charges(iq), &
+            & lattice=lat2, periodic=masks(:, imask))
+
+         call new_eeqbc2025_model(mol, model, error)
+         if (allocated(error)) return
+
+         call get_charges(model, mol, error, q1, dqdr1, dqdL1)
+         if (allocated(error)) return
+         call get_charges(model, mol_big, error, q2, dqdr2, dqdL2)
+         if (allocated(error)) return
+
+         if (abs(sum(q1) - charges(iq)) > thr) then
+            call test_failed(error, "1D EEQBC total charge constraint violated")
+            return
+         end if
+         if (maxval(abs(q1 - q2)) > thr .or. maxval(abs(dqdr1 - dqdr2)) > thr &
+            & .or. maxval(abs(dqdL1 - dqdL2)) > thr) then
+            call test_failed(error, "1D EEQBC depends on nonperiodic lattice vectors")
+            return
+         end if
+         if (imask == 1) then
+            q_ref = q1
+         else if (maxval(abs(q1 - q_ref)) > thr) then
+            call test_failed(error, "1D EEQBC charges depend on periodic mask index")
+            return
+         end if
+
+         ! Full derivative validation for TFF (neutral) and FTF (charged)
+         if ((iq == 1 .and. imask == 1) .or. (iq == 2 .and. imask == 2)) then
+            call test_dbdr(error, mol, model)
+            if (allocated(error)) return
+            call test_dbdL(error, mol, model)
+            if (allocated(error)) return
+            call test_dadr(error, mol, model)
+            if (allocated(error)) return
+            call test_dadL(error, mol, model)
+            if (allocated(error)) return
+            call test_numgrad(error, mol, model)
+            if (allocated(error)) return
+            call test_numsigma(error, mol, model)
+            if (allocated(error)) return
+            call test_numdqdr(error, mol, model)
+            if (allocated(error)) return
+            call test_numdqdL(error, mol, model)
+            if (allocated(error)) return
+         end if
+      end do
+   end do
+end subroutine test_eeqbc_1d_all_masks
+
+subroutine test_eeqbc_2d_all_masks(error)
+   type(error_type), allocatable, intent(out) :: error
+   type(structure_type) :: mol, mol_big
+   class(mchrg_model_type), allocatable :: model
+   real(wp) :: xyz(3, 3), a1(3), a2(3), lat1(3, 3), lat2(3, 3)
+   real(wp) :: q1(3), q2(3), q_ref(3), dqdr1(3, 3, 3), dqdr2(3, 3, 3)
+   real(wp) :: dqdL1(3, 3, 3), dqdL2(3, 3, 3)
+   logical :: masks(3, 3)
+   integer :: imask, iq, p1, p2, np
+   real(wp) :: charges(2)
+
+   xyz = reshape([ &
+      & 0.0_wp, 0.0_wp, -0.3_wp, &
+      & 2.5_wp, 0.2_wp, 0.5_wp, &
+      & 0.6_wp, 2.1_wp, 0.4_wp], [3, 3])
+   a1 = [5.2_wp, 0.3_wp, 0.1_wp]
+   a2 = [0.5_wp, 6.1_wp, -0.2_wp]
+   masks = reshape([ &
+      & .true., .true., .false., &
+      & .true., .false., .true., &
+      & .false., .true., .true.], [3, 3])
+   charges = [0.0_wp, -1.0_wp]
+
+   do iq = 1, 2
+      do imask = 1, 3
+         select case (imask)
+         case (1); p1 = 1; p2 = 2; np = 3
+         case (2); p1 = 1; p2 = 3; np = 2
+         case (3); p1 = 2; p2 = 3; np = 1
+         end select
+         lat1 = 0.0_wp
+         lat1(:, p1) = a1
+         lat1(:, p2) = a2
+         lat1(:, np) = [0.0_wp, 0.0_wp, 20.0_wp]
+
+         lat2 = 0.0_wp
+         lat2(:, p1) = a1
+         lat2(:, p2) = a2
+         lat2(:, np) = [35.0_wp, -70.0_wp, 200.0_wp]
+
+         call new(mol, [30, 8, 1], xyz, charge=charges(iq), &
+            & lattice=lat1, periodic=masks(:, imask))
+         call new(mol_big, [30, 8, 1], xyz, charge=charges(iq), &
+            & lattice=lat2, periodic=masks(:, imask))
+
+         call new_eeqbc2025_model(mol, model, error)
+         if (allocated(error)) return
+
+         call get_charges(model, mol, error, q1, dqdr1, dqdL1)
+         if (allocated(error)) return
+         call get_charges(model, mol_big, error, q2, dqdr2, dqdL2)
+         if (allocated(error)) return
+
+         if (abs(sum(q1) - charges(iq)) > thr) then
+            call test_failed(error, "2D EEQBC total charge constraint violated")
+            return
+         end if
+         if (maxval(abs(q1 - q2)) > thr .or. maxval(abs(dqdr1 - dqdr2)) > thr &
+            & .or. maxval(abs(dqdL1 - dqdL2)) > thr) then
+            call test_failed(error, "2D EEQBC depends on nonperiodic lattice vector")
+            return
+         end if
+         if (imask == 1) then
+            q_ref = q1
+         else if (maxval(abs(q1 - q_ref)) > thr) then
+            call test_failed(error, "2D EEQBC charges depend on periodic mask index")
+            return
+         end if
+
+         ! Full derivative validation for TTF (neutral) and FTT (charged)
+         if ((iq == 1 .and. imask == 1) .or. (iq == 2 .and. imask == 3)) then
+            call test_dbdr(error, mol, model)
+            if (allocated(error)) return
+            call test_dbdL(error, mol, model)
+            if (allocated(error)) return
+            call test_dadr(error, mol, model)
+            if (allocated(error)) return
+            call test_dadL(error, mol, model)
+            if (allocated(error)) return
+            call test_numgrad(error, mol, model)
+            if (allocated(error)) return
+            call test_numsigma(error, mol, model)
+            if (allocated(error)) return
+            call test_numdqdr(error, mol, model)
+            if (allocated(error)) return
+            call test_numdqdL(error, mol, model)
+            if (allocated(error)) return
+         end if
+      end do
+   end do
+end subroutine test_eeqbc_2d_all_masks
+
+subroutine test_degenerate_lattice_error(error)
+   type(error_type), allocatable, intent(out) :: error
+   type(error_type), allocatable :: expected
+   type(structure_type) :: mol
+   class(mchrg_model_type), allocatable :: model
+   real(wp) :: q(2), lat(3, 3)
+
+   ! 1D zero periodic vector
+   lat = 0.0_wp
+   lat(:, 2) = [0.0_wp, 10.0_wp, 0.0_wp]
+   call new(mol, [8, 1], reshape([0.0_wp, 0.0_wp, 0.0_wp, 1.8_wp, 0.0_wp, 0.0_wp], [3, 2]))
+   mol%lattice = lat
+   mol%periodic = [.true., .false., .false.]
+   call new_eeqbc2025_model(mol, model, error)
+   if (allocated(error)) return
+   call get_charges(model, mol, expected, q)
+   if (.not. allocated(expected)) then
+      call test_failed(error, "Degenerate 1D lattice was not rejected")
+      return
+   end if
+   deallocate(expected)
+
+   ! 2D collinear periodic vectors
+   lat = 0.0_wp
+   lat(:, 1) = [5.0_wp, 0.0_wp, 0.0_wp]
+   lat(:, 2) = [10.0_wp, 0.0_wp, 0.0_wp]
+   lat(:, 3) = [0.0_wp, 0.0_wp, 10.0_wp]
+   call new(mol, [8, 1], reshape([0.0_wp, 0.0_wp, 0.0_wp, 1.8_wp, 0.0_wp, 0.0_wp], [3, 2]))
+   mol%lattice = lat
+   mol%periodic = [.true., .true., .false.]
+   call get_charges(model, mol, expected, q)
+   if (.not. allocated(expected)) then
+      call test_failed(error, "Degenerate 2D collinear lattice was not rejected")
+      return
+   end if
+   deallocate(expected)
+end subroutine test_degenerate_lattice_error
 
 end module test_pbc

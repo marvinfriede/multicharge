@@ -21,6 +21,7 @@ module test_wignerseitz
    use mctc_io_structure, only: structure_type, new
    use mctc_wignerseitz, only: wignerseitz_cell, new_wignerseitz_cell
    use mstore, only: get_structure
+   use multicharge_model_type, only: get_dir_trans, init_wignerseitz_cell
    implicit none
    private
 
@@ -39,8 +40,12 @@ subroutine collect_wignerseitz(testsuite)
 
    testsuite = [ &
       & new_unittest("lattice-points-0d", test_latticepoints_0d), &
+      & new_unittest("lattice-points-1d", test_latticepoints_1d), &
+      & new_unittest("lattice-points-2d", test_latticepoints_2d), &
       & new_unittest("lattice-points-3d", test_latticepoints_3d), &
       & new_unittest("wignerseitz-cell-0d", test_wsc_0d), &
+      & new_unittest("wignerseitz-cell-1d", test_wsc_1d), &
+      & new_unittest("wignerseitz-cell-2d", test_wsc_2d), &
       & new_unittest("wignerseitz-cell-3d", test_wsc_3d), &
       & new_unittest("wignerseitz-self-images", test_self_images) &
       & ]
@@ -186,5 +191,178 @@ subroutine test_self_images(error)
       end if
    end do
 end subroutine test_self_images
+
+subroutine test_latticepoints_1d(error)
+   type(error_type), allocatable, intent(out) :: error
+   type(structure_type) :: mol
+   real(wp), allocatable :: trans1(:, :), trans2(:, :)
+   real(wp) :: lat(3, 3)
+   logical :: masks(3, 3)
+   integer :: imask, itr
+
+   masks = reshape([ &
+      & .true., .false., .false., &
+      & .false., .true., .false., &
+      & .false., .false., .true.], [3, 3])
+
+   do imask = 1, 3
+      lat = 0.0_wp
+      lat(:, imask) = [5.0_wp, 0.0_wp, 0.0_wp]
+      call new(mol, [6], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      mol%lattice = lat
+      mol%periodic = masks(:, imask)
+
+      call get_dir_trans(mol, trans1, thr2)
+      call check(error, size(trans1, 1), 3)
+      if (allocated(error)) return
+      call check(error, size(trans1, 2), 3)
+      if (allocated(error)) return
+
+      call get_dir_trans(mol, trans1, 12.0_wp)
+      ! ceiling(12.0 / 5.0) = 3 -> 2*3 + 1 = 7 points
+      call check(error, size(trans1, 2), 7)
+      if (allocated(error)) return
+
+      ! Perturb nonperiodic lattice vectors wildly; translations must be identical
+      do itr = 1, 3
+         if (itr /= imask) lat(:, itr) = [100.0_wp * itr, -50.0_wp, 250.0_wp]
+      end do
+      mol%lattice = lat
+      call get_dir_trans(mol, trans2, 12.0_wp)
+      call check(error, size(trans2, 2), 7)
+      if (allocated(error)) return
+      if (maxval(abs(trans1 - trans2)) > thr) then
+         call test_failed(error, "1D lattice points depend on nonperiodic lattice vectors")
+         return
+      end if
+   end do
+end subroutine test_latticepoints_1d
+
+subroutine test_latticepoints_2d(error)
+   type(error_type), allocatable, intent(out) :: error
+   type(structure_type) :: mol
+   real(wp), allocatable :: trans1(:, :), trans2(:, :)
+   real(wp) :: lat(3, 3), a1(3), a2(3)
+   logical :: masks(3, 3)
+   integer :: imask, p1, p2, np
+
+   masks = reshape([ &
+      & .true., .true., .false., &
+      & .true., .false., .true., &
+      & .false., .true., .true.], [3, 3])
+   a1 = [5.0_wp, 0.0_wp, 0.0_wp]
+   a2 = [0.0_wp, 6.0_wp, 0.0_wp]
+
+   do imask = 1, 3
+      select case (imask)
+      case (1); p1 = 1; p2 = 2; np = 3
+      case (2); p1 = 1; p2 = 3; np = 2
+      case (3); p1 = 2; p2 = 3; np = 1
+      end select
+      lat = 0.0_wp
+      lat(:, p1) = a1
+      lat(:, p2) = a2
+      call new(mol, [6], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      mol%lattice = lat
+      mol%periodic = masks(:, imask)
+
+      call get_dir_trans(mol, trans1, thr2)
+      call check(error, size(trans1, 2), 9)
+      if (allocated(error)) return
+
+      call get_dir_trans(mol, trans1, 11.0_wp)
+      ! rep1 = ceiling(11/5) = 3 (7), rep2 = ceiling(11/6) = 2 (5) -> 35
+      call check(error, size(trans1, 2), 35)
+      if (allocated(error)) return
+
+      lat(:, np) = [42.0_wp, -99.0_wp, 500.0_wp]
+      mol%lattice = lat
+      call get_dir_trans(mol, trans2, 11.0_wp)
+      if (maxval(abs(trans1 - trans2)) > thr) then
+         call test_failed(error, "2D lattice points depend on nonperiodic lattice vector")
+         return
+      end if
+   end do
+end subroutine test_latticepoints_2d
+
+subroutine test_wsc_1d(error)
+   type(error_type), allocatable, intent(out) :: error
+   type(structure_type) :: mol
+   type(wignerseitz_cell) :: wsc
+   real(wp) :: lat(3, 3), vec(3), total(3)
+   logical :: masks(3, 3)
+   integer :: imask, i
+
+   masks = reshape([ &
+      & .true., .false., .false., &
+      & .false., .true., .false., &
+      & .false., .false., .true.], [3, 3])
+
+   do imask = 1, 3
+      lat = 0.0_wp
+      lat(:, imask) = [3.0_wp, 4.0_wp, 0.0_wp]
+      call new(mol, [8, 1], reshape([0.0_wp, 0.0_wp, 0.0_wp, &
+         & 1.5_wp, 2.0_wp, 1.2_wp], [3, 2]))
+      mol%lattice = lat
+      mol%periodic = masks(:, imask)
+      call init_wignerseitz_cell(wsc, mol)
+      call check(error, size(wsc%trans, 2), 3)
+      if (allocated(error)) return
+      ! Atom 1 has 2 closest self images (+a and -a)
+      call check(error, wsc%nimg(1, 1), 2)
+      if (allocated(error)) return
+      ! Atom 2 is at half-cell along a, so it has 2 equidistant images to atom 1
+      call check(error, wsc%nimg(2, 1), 2)
+      if (allocated(error)) return
+      total = 0.0_wp
+      do i = 1, wsc%nimg(1, 1)
+         vec = wsc%trans(:, wsc%tridx(i, 1, 1))
+         if (abs(norm2(vec) - 5.0_wp) > thr) then
+            call test_failed(error, "1D WSC self image has wrong length")
+            return
+         end if
+         total = total + vec
+      end do
+      if (maxval(abs(total)) > thr) then
+         call test_failed(error, "1D WSC self images do not cancel")
+         return
+      end if
+   end do
+end subroutine test_wsc_1d
+
+subroutine test_wsc_2d(error)
+   type(error_type), allocatable, intent(out) :: error
+   type(structure_type) :: mol
+   type(wignerseitz_cell) :: wsc
+   real(wp) :: lat(3, 3), total(3), vec(3)
+   integer :: i
+
+   ! Square 2D lattice in YZ plane (FTT) with nonperiodic X vector shorter than Y/Z!
+   ! A broken 3D WSC would pick the X vector as closest self image; 2D WSC must ignore X.
+   lat = reshape([ &
+      & 1.5_wp, 0.0_wp, 0.0_wp, &
+      & 0.0_wp, 5.2_wp, 0.0_wp, &
+      & 0.0_wp, 0.0_wp, 5.2_wp], [3, 3])
+   call new(mol, [8], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]), &
+      & lattice=lat, periodic=[.false., .true., .true.])
+   call init_wignerseitz_cell(wsc, mol)
+   call check(error, size(wsc%trans, 2), 9)
+   if (allocated(error)) return
+   call check(error, wsc%nimg(1, 1), 4)
+   if (allocated(error)) return
+   total = 0.0_wp
+   do i = 1, wsc%nimg(1, 1)
+      vec = wsc%trans(:, wsc%tridx(i, 1, 1))
+      if (abs(vec(1)) > thr .or. abs(norm2(vec) - 5.2_wp) > thr) then
+         call test_failed(error, "2D WSC selected nonperiodic or non-minimal self image")
+         return
+      end if
+      total = total + vec
+   end do
+   if (maxval(abs(total)) > thr) then
+      call test_failed(error, "2D WSC self images do not cancel")
+      return
+   end if
+end subroutine test_wsc_2d
 
 end module test_wignerseitz

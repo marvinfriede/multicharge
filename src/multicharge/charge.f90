@@ -19,10 +19,9 @@
 
 !> Interface to the charge models
 module multicharge_charge
-   use mctc_cutoff, only : get_lattice_points
    use mctc_env, only : error_type, wp
    use mctc_io, only : structure_type
-   use multicharge_model, only : mchrg_model_type
+   use multicharge_model, only : mchrg_model_type, get_dir_trans, check_structure
    use multicharge_model_cache, only : cache_container
    use multicharge_param, only : new_eeq2019_model, new_eeqbc2025_model
    implicit none
@@ -64,6 +63,9 @@ subroutine get_charges(mchrg_model, mol, error, qvec, dqdr, dqdL, cache)
    real(wp), allocatable :: qloc(:), dqlocdr(:, :, :), dqlocdL(:, :, :)
    real(wp), allocatable :: trans(:, :)
 
+   call check_structure(mol, error)
+   if (allocated(error)) return
+
    grad = (present(dqdr) .and. present(dqdL)) .or. present(cache)
 
    allocate(cn(mol%nat), qloc(mol%nat))
@@ -72,7 +74,7 @@ subroutine get_charges(mchrg_model, mol, error, qvec, dqdr, dqdL, cache)
       allocate (dqlocdr(3, mol%nat, mol%nat), dqlocdL(3, 3, mol%nat))
    end if
 
-   call get_lattice_points(mol%periodic, mol%lattice, mchrg_model%ncoord%cutoff, trans)
+   call get_dir_trans(mol, trans, mchrg_model%ncoord%cutoff)
    call mchrg_model%ncoord%get_coordination_number(mol, trans, cn, dcndr, dcndL)
    call mchrg_model%local_charge(mol, trans, qloc, dqlocdr, dqlocdL)
 
@@ -117,6 +119,7 @@ subroutine get_eeq_charges(mol, error, qvec, dqdr, dqdL)
    class(mchrg_model_type), allocatable :: eeq_model
 
    call new_eeq2019_model(mol, eeq_model, error)
+   if (allocated(error)) return
 
    call get_charges(eeq_model, mol, error, qvec, dqdr, dqdL)
 
@@ -144,6 +147,7 @@ subroutine get_eeqbc_charges(mol, error, qvec, dqdr, dqdL)
    class(mchrg_model_type), allocatable :: eeqbc_model
 
    call new_eeqbc2025_model(mol, eeqbc_model, error)
+   if (allocated(error)) return
 
    call get_charges(eeqbc_model, mol, error, qvec, dqdr, dqdL)
 

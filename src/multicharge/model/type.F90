@@ -23,19 +23,22 @@
 !> General charge model
 module multicharge_model_type
 
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_cutoff, only: get_lattice_points
    use mctc_env, only: error_type, fatal_error, wp, ik => IK
    use mctc_io, only: structure_type
    use mctc_io_constants, only: pi
    use mctc_io_math, only: matinv_3x3
    use mctc_ncoord, only: ncoord_type
+   use mctc_wignerseitz, only: wignerseitz_cell
    use multicharge_blas, only: gemv, symv, gemm
    use multicharge_lapack, only: sytrf, sytrs, sytri
    use multicharge_model_cache, only: model_cache, cache_container
    implicit none
    private
 
-   public :: mchrg_model_type, get_dir_trans, get_rec_trans
+   public :: mchrg_model_type, get_dir_trans, get_rec_trans, check_structure
+   public :: init_wignerseitz_cell, get_periodic_axes, cross_product_3d
 
    !> Abstract multicharge model type
    type, abstract :: mchrg_model_type
@@ -131,7 +134,103 @@ module multicharge_model_type
 
 contains
 
-!> Generate direct lattice translation vectors for a periodic structure
+!> Compute 3D cross product of two vectors
+pure function cross_product_3d(a, b) result(c)
+   !> First vector
+   real(wp), intent(in) :: a(3)
+   !> Second vector
+   real(wp), intent(in) :: b(3)
+   !> Cross product a x b
+   real(wp) :: c(3)
+
+   c(1) = a(2) * b(3) - a(3) * b(2)
+   c(2) = a(3) * b(1) - a(1) * b(3)
+   c(3) = a(1) * b(2) - a(2) * b(1)
+end function cross_product_3d
+
+!> Extract the number and indices of active periodic axes
+pure subroutine get_periodic_axes(periodic, ndim, p_axes)
+   !> Periodicity mask
+   logical, intent(in) :: periodic(:)
+   !> Number of periodic dimensions (0, 1, 2, or 3)
+   integer, intent(out) :: ndim
+   !> Indices of active periodic axes in 1..ndim
+   integer, intent(out) :: p_axes(3)
+
+   integer :: i
+
+   ndim = 0
+   p_axes = 0
+   do i = 1, min(3, size(periodic))
+      if (periodic(i)) then
+         ndim = ndim + 1
+         p_axes(ndim) = i
+      end if
+   end do
+end subroutine get_periodic_axes
+
+!> Validate periodic subspace geometry for a structure
+subroutine check_structure(mol, error)
+   !> Molecular structure data
+   type(structure_type), intent(in) :: mol
+   !> Error handling
+   type(error_type), allocatable, intent(out) :: error
+
+   integer :: ndim, p_axes(3)
+   real(wp) :: a1(3), a2(3), a3(3), len1, len2, area, vol
+   real(wp), parameter :: tol_deg = 1.0e-10_wp
+
+   if (.not. allocated(mol%periodic)) return
+   call get_periodic_axes(mol%periodic, ndim, p_axes)
+
+   select case (ndim)
+   case (0)
+      return
+   case (1)
+      a1 = mol%lattice(:, p_axes(1))
+      if (.not. all(ieee_is_finite(a1))) then
+         call fatal_error(error, "1D periodic lattice vector contains non-finite values")
+         return
+      end if
+      len1 = norm2(a1)
+      if (len1 <= tol_deg) then
+         call fatal_error(error, "Degenerate 1D periodic lattice vector")
+         return
+      end if
+   case (2)
+      a1 = mol%lattice(:, p_axes(1))
+      a2 = mol%lattice(:, p_axes(2))
+      if (.not. all(ieee_is_finite(a1)) .or. .not. all(ieee_is_finite(a2))) then
+         call fatal_error(error, "2D periodic lattice vectors contain non-finite values")
+         return
+      end if
+      len1 = norm2(a1)
+      len2 = norm2(a2)
+      area = norm2(cross_product_3d(a1, a2))
+      if (len1 <= tol_deg .or. len2 <= tol_deg .or. area <= tol_deg * len1 * len2) then
+         call fatal_error(error, "Degenerate 2D periodic lattice vectors")
+         return
+      end if
+   case (3)
+      a1 = mol%lattice(:, 1)
+      a2 = mol%lattice(:, 2)
+      a3 = mol%lattice(:, 3)
+      if (.not. all(ieee_is_finite(mol%lattice))) then
+         call fatal_error(error, "3D periodic lattice vectors contain non-finite values")
+         return
+      end if
+      len1 = norm2(a1)
+      len2 = norm2(a2)
+      vol = abs(dot_product(a1, cross_product_3d(a2, a3)))
+      if (len1 <= tol_deg .or. len2 <= tol_deg .or. norm2(a3) <= tol_deg &
+         & .or. vol <= tol_deg * len1 * len2 * norm2(a3)) then
+         call fatal_error(error, "Degenerate 3D periodic lattice vectors")
+         return
+      end if
+   end select
+end subroutine check_structure
+
+!> Generate direct lattice translation vectors strictly in the periodic subspace
 subroutine get_dir_trans(mol, trans, cutoff)
    !> Molecular structure data
    type(structure_type), intent(in) :: mol
@@ -142,15 +241,153 @@ subroutine get_dir_trans(mol, trans, cutoff)
    !> Optional lattice-vector cutoff
    real(wp), intent(in), optional :: cutoff
 
-   integer, parameter :: rep(3) = [2, 2, 2]
+   integer :: ndim, p_axes(3), rep(3)
+   real(wp) :: eff_lat(3, 3), a1(3), a2(3), len1, len2, area
+   real(wp), parameter :: tol_deg = 1.0e-10_wp
 
-   if (present(cutoff)) then
-      call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
-   else
-      call get_lattice_points(mol%lattice, rep, .true., trans)
+   if (.not. allocated(mol%periodic)) then
+      allocate(trans(3, 1), source=0.0_wp)
+      return
    end if
 
+   call get_periodic_axes(mol%periodic, ndim, p_axes)
+   rep = 0
+   eff_lat = 0.0_wp
+
+   select case (ndim)
+   case (0)
+      allocate(trans(3, 1), source=0.0_wp)
+      return
+   case (1)
+      a1 = mol%lattice(:, p_axes(1))
+      eff_lat(:, p_axes(1)) = a1
+      if (present(cutoff)) then
+         len1 = norm2(a1)
+         if (len1 > tol_deg) then
+            rep(p_axes(1)) = ceiling(cutoff / len1)
+         end if
+      else
+         rep(p_axes(1)) = 2
+      end if
+   case (2)
+      a1 = mol%lattice(:, p_axes(1))
+      a2 = mol%lattice(:, p_axes(2))
+      eff_lat(:, p_axes(1)) = a1
+      eff_lat(:, p_axes(2)) = a2
+      if (present(cutoff)) then
+         len1 = norm2(a1)
+         len2 = norm2(a2)
+         area = norm2(cross_product_3d(a1, a2))
+         if (len1 > tol_deg .and. len2 > tol_deg .and. area > tol_deg * len1 * len2) then
+            rep(p_axes(1)) = ceiling(cutoff * len2 / area)
+            rep(p_axes(2)) = ceiling(cutoff * len1 / area)
+         end if
+      else
+         rep(p_axes(1)) = 2
+         rep(p_axes(2)) = 2
+      end if
+   case (3)
+      eff_lat = mol%lattice
+      if (present(cutoff)) then
+         call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
+         return
+      else
+         rep = [2, 2, 2]
+      end if
+   end select
+
+   call get_lattice_points(eff_lat, rep, .true., trans)
+
 end subroutine get_dir_trans
+
+!> Construct a Wigner-Seitz cell using only periodic lattice translations
+subroutine init_wignerseitz_cell(self, mol)
+   !> Wigner-Seitz cell instance
+   type(wignerseitz_cell), intent(out) :: self
+   !> Molecular structure data
+   type(structure_type), intent(in) :: mol
+
+   real(wp), parameter :: thr = sqrt(epsilon(0.0_wp))
+   integer :: iat, jat, ntr, nimg
+   integer, allocatable :: tridx(:)
+   real(wp) :: vec(3)
+   real(wp), allocatable :: trans(:, :)
+
+   call get_dir_trans(mol, trans, thr)
+   ntr = size(trans, 2)
+   allocate(self%nimg(mol%nat, mol%nat), self%tridx(ntr, mol%nat, mol%nat), &
+      & tridx(ntr))
+
+   !$omp parallel do default(none) schedule(runtime) collapse(2) &
+   !$omp shared(mol, trans, self) private(iat, jat, vec, nimg, tridx)
+   do iat = 1, mol%nat
+      do jat = 1, mol%nat
+         vec(:) = mol%xyz(:, iat) - mol%xyz(:, jat)
+         call get_wsc_pairs(nimg, trans, vec, tridx)
+         self%nimg(jat, iat) = nimg
+         self%tridx(:, jat, iat) = tridx
+      end do
+   end do
+
+   if (mol%nat > 0) self%nimg_max = maxval(self%nimg)
+   call move_alloc(trans, self%trans)
+
+end subroutine init_wignerseitz_cell
+
+!> Find periodic images with minimum distance for Wigner-Seitz cell construction.
+!> Safe for 1D/2D where all candidate images may be equidistant.
+pure subroutine get_wsc_pairs(iws, trans, rij, list)
+   !> Number of equivalent minimum-distance images
+   integer, intent(out) :: iws
+   !> Lattice translation vectors
+   real(wp), intent(in) :: trans(:, :)
+   !> Interatomic displacement vector
+   real(wp), intent(in) :: rij(3)
+   !> Indices of equivalent minimum-distance images in trans
+   integer, intent(out) :: list(:)
+
+   integer :: itr, img, pos
+   integer, allocatable :: index(:)
+   logical, allocatable :: mask(:)
+   real(wp), allocatable :: dist(:)
+   real(wp) :: vec(3), r2
+   real(wp), parameter :: thr = sqrt(epsilon(0.0_wp))
+   real(wp), parameter :: tol = 0.3_wp
+
+   list = 0
+   iws = 0
+   allocate(dist(size(trans, 2)), mask(size(trans, 2)), index(size(trans, 2)))
+
+   img = 0
+   do itr = 1, size(trans, 2)
+      vec(:) = rij - trans(:, itr)
+      r2 = dot_product(vec, vec)
+      if (r2 < thr) cycle
+      img = img + 1
+      index(img) = itr
+      dist(img) = r2
+   end do
+
+   if (img == 0) return
+
+   mask = .true.
+   pos = minloc(dist(:img), dim=1, mask=mask(:img))
+   mask(pos) = .false.
+   r2 = dist(pos)
+   iws = 1
+   list(iws) = index(pos)
+
+   do
+      if (iws >= img) exit
+      pos = minloc(dist(:img), dim=1, mask=mask(:img))
+      if (pos <= 0) exit
+      if (dist(pos) - r2 > tol) exit
+      mask(pos) = .false.
+      iws = iws + 1
+      list(iws) = index(pos)
+   end do
+
+end subroutine get_wsc_pairs
 
 subroutine get_rec_trans(lattice, trans)
    real(wp), intent(in) :: lattice(:, :)
@@ -212,12 +449,14 @@ subroutine solve(self, mol, error, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL, &
    real(wp), allocatable :: dxdr(:, :, :), dxdL(:, :, :)
    type(cache_container), target :: local_cache
    type(cache_container), pointer :: cache
-   real(wp), allocatable :: trans(:, :)
 
    ! Calculate gradient if the respective arrays are present
    dcn = present(dcndr) .and. present(dcndL)
    grad = present(gradient) .and. present(sigma) .and. dcn
    cpq = ((present(dqdr) .and. present(dqdL)) .or. present(response)) .and. dcn
+
+   call check_structure(mol, error)
+   if (allocated(error)) return
 
    cache => local_cache
    if (present(response)) then
@@ -347,10 +586,8 @@ subroutine add_charge_hessian(self, mol, error, weights, hessian, cache)
    real(wp), pointer :: da(:, :), dq(:, :)
 
    nat = mol%nat
-   if (any(mol%periodic) .and. .not. all(mol%periodic)) then
-      call fatal_error(error, "Analytical charge Hessian requires molecular or 3D periodic boundary conditions")
-      return
-   end if
+   call check_structure(mol, error)
+   if (allocated(error)) return
    if (size(weights) /= nat .or. any(shape(hessian) /= 3*nat)) then
       call fatal_error(error, "Invalid dimensions for charge Hessian contraction")
       return
