@@ -133,7 +133,7 @@ subroutine get_alpha(lattice, alpha, periodic)
       case (2)
          call get_alpha_2d(lattice(:, p_axes(1)), lattice(:, p_axes(2)), alpha)
          return
-      case (3)
+      case default
          continue
       end select
    end if

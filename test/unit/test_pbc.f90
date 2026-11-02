@@ -1240,7 +1240,7 @@ subroutine test_eeqbc_2d_all_masks(error)
          select case (imask)
          case (1); p1 = 1; p2 = 2; np = 3
          case (2); p1 = 1; p2 = 3; np = 2
-         case (3); p1 = 2; p2 = 3; np = 1
+         case default; p1 = 2; p2 = 3; np = 1
          end select
          lat1 = 0.0_wp
          lat1(:, p1) = a1
@@ -1368,7 +1368,7 @@ subroutine test_eeq_2d_all_masks(error)
       select case (imask)
       case (1); p1 = 1; p2 = 2; np = 3
       case (2); p1 = 1; p2 = 3; np = 2
-      case (3); p1 = 2; p2 = 3; np = 1
+      case default; p1 = 2; p2 = 3; np = 1
       end select
       lat1 = 0.0_wp
       lat1(:, p1) = a1

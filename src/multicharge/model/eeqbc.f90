@@ -242,7 +242,7 @@ subroutine update(self, mol, cache, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL)
          end if
          call self%get_dcmat_pbc(mol, ptr%wsc, ptr%dcdr, ptr%dcdL)
       end if
-   case (0)
+   case default
       call self%get_cmat_0d(mol, ptr%cmat)
 
       ! cmat gradients
@@ -317,7 +317,7 @@ subroutine get_xvec(self, mol, cache, xvec)
       !$omp end critical (get_xvec_)
       deallocate(xvec_local)
       !$omp end parallel
-   case (0)
+   case default
       continue
    end select
 end subroutine get_xvec
@@ -431,7 +431,7 @@ subroutine get_xvec_derivs(self, mol, cache, dxdr, dxdL)
       !$omp end critical (get_xvec_derivs_update)
       deallocate(dxdL_local, dxdr_local)
       !$omp end parallel
-   case (0)
+   case default
       !$omp parallel default(none) &
       !$omp shared(mol, self, ptr, dxdr, dxdL) &
       !$omp private(iat, izp, jat, jzp, vec, dxdr_local, dxdL_local)
@@ -501,7 +501,7 @@ subroutine add_model_hessian(self, mol, error, cache, adj, hessian)
    select case (count(mol%periodic))
    case (1, 2, 3)
       call get_dir_trans(mol, dtrans, self%ncoord%cutoff)
-   case (0)
+   case default
       allocate(dtrans(3, 1), source=0.0_wp)
    end select
    allocate(width(nat), dw(nat), v(nat), hard(nat), dh(nat), ddh(nat))
@@ -610,7 +610,7 @@ subroutine get_coulomb_matrix(self, mol, cache, amat)
    select case (count(mol%periodic))
    case (1, 2, 3)
       call get_amat_pbc(self, mol, ptr%wsc, ptr%cn, ptr%qloc, ptr%cmat, amat)
-   case (0)
+   case default
       call get_amat_0d(self, mol, ptr%cn, ptr%qloc, ptr%cmat, amat)
    end select
 end subroutine get_coulomb_matrix
@@ -790,7 +790,7 @@ subroutine get_coulomb_derivs(self, mol, cache, qvec, dadr, dadL, atrace)
       & ptr%qloc, qvec, ptr%dcndr, ptr%dcndL, ptr%dqlocdr, &
       & ptr%dqlocdL, ptr%cmat, ptr%dcdr, ptr%dcdL, dadr, dadL, atrace)
 
-   case (0)
+   case default
       call get_damat_0d(self, mol, ptr%cn, &
       & ptr%qloc, qvec, ptr%dcndr, ptr%dcndL, ptr%dqlocdr, &
       & ptr%dqlocdL, ptr%cmat, ptr%dcdr, ptr%dcdL, dadr, dadL, atrace)

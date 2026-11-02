@@ -257,7 +257,7 @@ subroutine test_latticepoints_2d(error)
       select case (imask)
       case (1); p1 = 1; p2 = 2; np = 3
       case (2); p1 = 1; p2 = 3; np = 2
-      case (3); p1 = 2; p2 = 3; np = 1
+      case default; p1 = 2; p2 = 3; np = 1
       end select
       lat = 0.0_wp
       lat(:, p1) = a1

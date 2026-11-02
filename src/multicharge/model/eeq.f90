@@ -230,7 +230,7 @@ subroutine add_model_hessian(self, mol, error, cache, adj, hessian)
       call add_periodic_hessian_2d(self, mol, ptr%wsc, ptr%alpha, cache%qvec, adj, hessian, diagonal)
    case (1)
       call add_periodic_hessian_1d(self, mol, ptr%wsc, ptr%alpha, cache%qvec, adj, hessian, diagonal)
-   case (0)
+   case default
       npair = nat*(nat+1)/2
       !$omp parallel do default(none) schedule(runtime) &
       !$omp shared(self, mol, cache, adj, hessian, npair) &
@@ -508,7 +508,7 @@ subroutine get_coulomb_matrix(self, mol, cache, amat)
       call get_amat_2d(self, mol, ptr%wsc, ptr%alpha, amat)
    case (1)
       call get_amat_1d(self, mol, ptr%wsc, ptr%alpha, amat)
-   case (0)
+   case default
       call get_amat_0d(self, mol, amat)
    end select
 end subroutine get_coulomb_matrix
@@ -809,7 +809,7 @@ subroutine get_coulomb_derivs(self, mol, cache, qvec, dadr, dadL, atrace)
       call get_damat_2d(self, mol, ptr%wsc, ptr%alpha, qvec, dadr, dadL, atrace)
    case (1)
       call get_damat_1d(self, mol, ptr%wsc, ptr%alpha, qvec, dadr, dadL, atrace)
-   case (0)
+   case default
       call get_damat_0d(self, mol, qvec, dadr, dadL, atrace)
    end select
 end subroutine get_coulomb_derivs

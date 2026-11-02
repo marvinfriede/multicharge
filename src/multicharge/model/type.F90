@@ -184,7 +184,7 @@ subroutine check_structure(mol, error)
    call get_periodic_axes(mol%periodic, ndim, p_axes)
 
    select case (ndim)
-   case (0)
+   case default
       return
    case (1)
       a1 = mol%lattice(:, p_axes(1))
@@ -255,7 +255,7 @@ subroutine get_dir_trans(mol, trans, cutoff)
    eff_lat = 0.0_wp
 
    select case (ndim)
-   case (0)
+   case default
       allocate(trans(3, 1), source=0.0_wp)
       return
    case (1)
@@ -661,9 +661,9 @@ subroutine local_charge(self, mol, trans, qloc, dqlocdr, dqlocdL)
    !> Local atomic partial charges
    real(wp), intent(out) :: qloc(:)
    !> Optional derivative of local atomic partial charges w.r.t. atomic positions
-   real(wp), intent(out), optional :: dqlocdr(3, mol%nat, mol%nat)
+   real(wp), intent(out), optional :: dqlocdr(:, :, :)
    !> Optional derivative of local atomic partial charges w.r.t. lattice vectors
-   real(wp), intent(out), optional :: dqlocdL(3, 3, mol%nat)
+   real(wp), intent(out), optional :: dqlocdL(:, :, :)
 
    qloc = 0.0_wp
    if (present(dqlocdr) .and. present(dqlocdL)) then
