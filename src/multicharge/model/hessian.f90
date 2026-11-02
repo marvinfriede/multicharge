@@ -30,16 +30,29 @@ pure subroutine coulomb_kernel(r, gam, val, dr, drr, dg, drg, dgg)
    real(wp), intent(in) :: r, gam
    real(wp), intent(out) :: val, dr, drr
    real(wp), intent(out), optional :: dg, drg, dgg
-   real(wp) :: erfval, ex
+   real(wp) :: erfval, ex, u, u2, c1, c3
 
-   erfval = erf(gam*r)
-   ex = 2.0_wp/sqrt(pi)*exp(-(gam*r)**2)
-   val = erfval/r
-   dr = gam*ex/r - erfval/r**2
-   drr = -2.0_wp*gam**3*ex - 2.0_wp*gam*ex/r**2 + 2.0_wp*erfval/r**3
+   u = gam * r
+   u2 = u * u
+   ex = (2.0_wp / sqrt(pi)) * exp(-u2)
+   if (u < 1.0e-2_wp) then
+      c1 = 2.0_wp * gam / sqrt(pi)
+      c3 = 2.0_wp * gam**3 / sqrt(pi)
+      val = c1 * (1.0_wp - u2 * (1.0_wp / 3.0_wp - u2 * (0.1_wp &
+         & - u2 * (1.0_wp / 42.0_wp - u2 / 216.0_wp))))
+      dr = c3 * r * (-2.0_wp / 3.0_wp + u2 * (0.4_wp &
+         & - u2 * (1.0_wp / 7.0_wp - u2 / 27.0_wp)))
+      drr = c3 * (-2.0_wp / 3.0_wp + u2 * (1.2_wp &
+         & - u2 * (5.0_wp / 7.0_wp - 7.0_wp * u2 / 27.0_wp)))
+   else
+      erfval = erf(u)
+      val = erfval / r
+      dr = gam * ex / r - erfval / r**2
+      drr = -2.0_wp * gam**3 * ex - 2.0_wp * gam * ex / r**2 + 2.0_wp * erfval / r**3
+   end if
    if (present(dg)) dg = ex
-   if (present(drg)) drg = -2.0_wp*gam**2*r*ex
-   if (present(dgg)) dgg = -2.0_wp*gam*r**2*ex
+   if (present(drg)) drg = -2.0_wp * gam**2 * r * ex
+   if (present(dgg)) dgg = -2.0_wp * gam * r**2 * ex
 end subroutine coulomb_kernel
 
 
@@ -50,10 +63,17 @@ pure function radial_hessian(vec, dr, drr) result(box)
    integer :: ic
 
    r = norm2(vec)
-   box = (drr-dr/r)*spread(vec/r, 1, 3)*spread(vec/r, 2, 3)
-   do ic = 1, 3
-      box(ic, ic) = box(ic, ic) + dr/r
-   end do
+   box = 0.0_wp
+   if (r > 1.0e-7_wp) then
+      box = (drr - dr / r) * spread(vec / r, 1, 3) * spread(vec / r, 2, 3)
+      do ic = 1, 3
+         box(ic, ic) = box(ic, ic) + dr / r
+      end do
+   else
+      do ic = 1, 3
+         box(ic, ic) = drr
+      end do
+   end if
 end function radial_hessian
 
 

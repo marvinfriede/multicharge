@@ -331,7 +331,6 @@ subroutine add_periodic_hessian(self, mol, wsc, alpha, qvec, adj, hessian, diago
          do itr = 1, size(dtrans, 2)
             vec = rij+dtrans(:, itr)
             r = norm2(vec)
-            if (r < eps) cycle
             call coulomb_kernel(r, gam, val, dr, drr)
             call coulomb_kernel(r, alpha, val, ar, arr)
             box = box+wsw*radial_hessian(vec, dr-ar, drr-arr)
@@ -403,7 +402,6 @@ subroutine add_periodic_hessian_2d(self, mol, wsc, alpha, qvec, adj, hessian, di
          do itr = 1, size(dtrans, 2)
             vec = rij+dtrans(:, itr)
             r = norm2(vec)
-            if (r < eps) cycle
             call coulomb_kernel(r, gam, val, dr, drr)
             call coulomb_kernel(r, alpha, val, ar, arr)
             box = box+wsw*radial_hessian(vec, dr-ar, drr-arr)
@@ -502,7 +500,6 @@ subroutine add_periodic_hessian_1d(self, mol, wsc, alpha, qvec, adj, hessian, di
          do itr = 1, size(dtrans, 2)
             vec = rij - dtrans(:, itr)
             r = norm2(vec)
-            if (r < eps) cycle
             call coulomb_kernel(r, gam, val_g, dr_g, drr_g)
             call coulomb_kernel(r, alpha, val_a, dr_a, drr_a)
             box = box + wsw * radial_hessian(vec, dr_g - dr_a, drr_g - drr_a)
@@ -583,7 +580,12 @@ subroutine get_amat_0d(self, mol, amat)
          vec = mol%xyz(:, jat) - mol%xyz(:, iat)
          r2 = vec(1)**2 + vec(2)**2 + vec(3)**2
          gam = 1.0_wp / (self%rad(izp)**2 + self%rad(jzp)**2)
-         tmp = erf(sqrt(r2 * gam)) / sqrt(r2)
+         if (r2 * gam < 1.0e-4_wp) then
+            tmp = (2.0_wp * sqrt(gam) / sqrtpi) * (1.0_wp - (r2 * gam) * (1.0_wp / 3.0_wp &
+               & - (r2 * gam) * (0.1_wp - (r2 * gam) / 42.0_wp)))
+         else
+            tmp = erf(sqrt(r2 * gam)) / sqrt(r2)
+         end if
       end if
       amat(jat, iat) = tmp
       amat(iat, jat) = tmp
@@ -625,7 +627,7 @@ subroutine get_amat_3d(self, mol, wsc, alpha, amat)
       tmp = 0.0_wp
       do img = 1, wsc%nimg(jat, iat)
          vec = mol%xyz(:, jat) - mol%xyz(:, iat) + wsc%trans(:, wsc%tridx(img, jat, iat))
-         call get_amat_dir_3d(vec, gam, alpha, dtrans, dtmp)
+         call get_amat_dir_3d(vec, gam, alpha, dtrans, dtmp, skip_zero=(iat == jat))
          call get_amat_rec_3d(vec, rtrans, rec_weight, rtmp)
          tmp = tmp + (dtmp + rtmp) * wsw
       end do
@@ -640,23 +642,36 @@ subroutine get_amat_3d(self, mol, wsc, alpha, amat)
    amat(mol%nat + 1, mol%nat + 1) = 0.0_wp
 end subroutine get_amat_3d
 
-subroutine get_amat_dir_3d(rij, gam, alp, trans, amat)
+subroutine get_amat_dir_3d(rij, gam, alp, trans, amat, skip_zero)
    real(wp), intent(in) :: rij(3)
    real(wp), intent(in) :: gam
    real(wp), intent(in) :: alp
    real(wp), intent(in) :: trans(:, :)
    real(wp), intent(out) :: amat
+   logical, intent(in), optional :: skip_zero
 
    integer :: itr
-   real(wp) :: vec(3), r1, tmp
+   real(wp) :: vec(3), r1, r2, tmp, kmax
+   logical :: exclude_self
 
    amat = 0.0_wp
+   exclude_self = .true.
+   if (present(skip_zero)) exclude_self = skip_zero
+   kmax = max(gam, alp)
 
    do itr = 1, size(trans, 2)
       vec(:) = rij + trans(:, itr)
       r1 = norm2(vec)
-      if (r1 < eps) cycle
-      tmp = erf(gam * r1) / r1 - erf(alp * r1) / r1
+      if (exclude_self .and. r1 < eps) cycle
+      if (kmax * r1 < 1.0e-2_wp) then
+         r2 = r1 * r1
+         tmp = (2.0_wp / sqrtpi) * ((gam - alp) &
+            & - ((gam**3 - alp**3) / 3.0_wp) * r2 &
+            & + (0.1_wp * (gam**5 - alp**5)) * r2 * r2 &
+            & - ((gam**7 - alp**7) / 42.0_wp) * r2 * r2 * r2)
+      else
+         tmp = erf(gam * r1) / r1 - erf(alp * r1) / r1
+      end if
       amat = amat + tmp
    end do
 
@@ -714,7 +729,7 @@ subroutine get_amat_2d(self, mol, wsc, alpha, amat, error)
       gam = 1.0_wp / sqrt(self%rad(izp)**2 + self%rad(jzp)**2)
       if (iat == jat) then
          vec = 0.0_wp
-         call get_amat_dir_3d(vec, gam, alpha, dtrans, dtmp)
+         call get_amat_dir_3d(vec, gam, alpha, dtrans, dtmp, skip_zero=.true.)
          call get_amat_rec_2d(vec, alpha, area, n_hat, rtrans, rtmp)
          tmp = dtmp + rtmp + self%eta(izp) + sqrt2pi / self%rad(izp) - 2.0_wp * alpha / sqrtpi
       else
@@ -722,7 +737,7 @@ subroutine get_amat_2d(self, mol, wsc, alpha, amat, error)
          tmp = 0.0_wp
          do img = 1, wsc%nimg(jat, iat)
             vec = mol%xyz(:, jat) - mol%xyz(:, iat) + wsc%trans(:, wsc%tridx(img, jat, iat))
-            call get_amat_dir_3d(vec, gam, alpha, dtrans, dtmp)
+            call get_amat_dir_3d(vec, gam, alpha, dtrans, dtmp, skip_zero=.false.)
             call get_amat_rec_2d(vec, alpha, area, n_hat, rtrans, rtmp)
             tmp = tmp + (dtmp + rtmp) * wsw
          end do
@@ -804,7 +819,7 @@ subroutine get_amat_1d(self, mol, wsc, alpha, amat, error)
       gam = 1.0_wp / sqrt(self%rad(izp)**2 + self%rad(jzp)**2)
       if (iat == jat) then
          vec = 0.0_wp
-         call get_amat_dir_3d(vec, gam, alpha, dtrans, dtmp)
+         call get_amat_dir_3d(vec, gam, alpha, dtrans, dtmp, skip_zero=.true.)
          call get_amat_rec_1d(vec, alpha, len1, u_hat, rtrans, rtmp)
          tmp = dtmp + rtmp + self%eta(izp) + sqrt2pi / self%rad(izp) - 2.0_wp * alpha / sqrtpi
       else
@@ -812,7 +827,7 @@ subroutine get_amat_1d(self, mol, wsc, alpha, amat, error)
          tmp = 0.0_wp
          do img = 1, wsc%nimg(jat, iat)
             vec = mol%xyz(:, jat) - mol%xyz(:, iat) + wsc%trans(:, wsc%tridx(img, jat, iat))
-            call get_amat_dir_3d(vec, gam, alpha, dtrans, dtmp)
+            call get_amat_dir_3d(vec, gam, alpha, dtrans, dtmp, skip_zero=.false.)
             call get_amat_rec_1d(vec, alpha, len1, u_hat, rtrans, rtmp)
             tmp = tmp + (dtmp + rtmp) * wsw
          end do
@@ -911,7 +926,12 @@ subroutine get_damat_0d(self, mol, qvec, dadr, dadL, atrace)
       r2 = vec(1)**2 + vec(2)**2 + vec(3)**2
       gam = 1.0_wp / sqrt(self%rad(izp)**2 + self%rad(jzp)**2)
       arg = gam * gam * r2
-      dtmp = 2.0_wp * gam * exp(-arg) / (sqrtpi * r2) - erf(sqrt(arg)) / (r2 * sqrt(r2))
+      if (arg < 1.0e-4_wp) then
+         dtmp = (2.0_wp * gam**3 / sqrtpi) * (-2.0_wp / 3.0_wp &
+            & + arg * (0.4_wp - arg * (1.0_wp / 7.0_wp - arg / 27.0_wp)))
+      else
+         dtmp = 2.0_wp * gam * exp(-arg) / (sqrtpi * r2) - erf(sqrt(arg)) / (r2 * sqrt(r2))
+      end if
       dG = dtmp * vec
       dS = spread(dG, 1, 3) * spread(vec, 2, 3)
       atrace(:, iat) = atrace(:, iat) - dG * qvec(jat)
@@ -966,7 +986,7 @@ subroutine get_damat_3d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace)
       wsw = 1.0_wp / real(wsc%nimg(jat, iat), wp)
       do img = 1, wsc%nimg(jat, iat)
          vec = mol%xyz(:, jat) - mol%xyz(:, iat) + wsc%trans(:, wsc%tridx(img, jat, iat))
-         call get_damat_dir_3d(vec, gam, alpha, dtrans, dGd, dSd)
+         call get_damat_dir_3d(vec, gam, alpha, dtrans, dGd, dSd, skip_zero=(iat == jat))
          call get_damat_rec_3d(vec, rtrans, rec_weight, rec_strain, dGr, dSr)
          dG = dG + (dGd + dGr) * wsw
          dS = dS + (dSd + dSr) * wsw
@@ -986,32 +1006,44 @@ subroutine get_damat_3d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace)
    !$omp end parallel
 end subroutine get_damat_3d
 
-subroutine get_damat_dir_3d(rij, gam, alp, trans, dg, ds)
+subroutine get_damat_dir_3d(rij, gam, alp, trans, dg, ds, skip_zero)
    real(wp), intent(in) :: rij(3)
    real(wp), intent(in) :: gam
    real(wp), intent(in) :: alp
    real(wp), intent(in) :: trans(:, :)
    real(wp), intent(out) :: dg(3)
    real(wp), intent(out) :: ds(3, 3)
+   logical, intent(in), optional :: skip_zero
 
    integer :: itr
-   real(wp) :: vec(3), r1, r2, gtmp, atmp, gam2, alp2
+   real(wp) :: vec(3), r1, r2, gtmp, atmp, gam2, alp2, kmax, dtmp
+   logical :: exclude_self
 
    dg(:) = 0.0_wp
    ds(:, :) = 0.0_wp
 
+   exclude_self = .true.
+   if (present(skip_zero)) exclude_self = skip_zero
+   kmax = max(gam, alp)
    gam2 = gam * gam
    alp2 = alp * alp
 
    do itr = 1, size(trans, 2)
       vec(:) = rij + trans(:, itr)
       r1 = norm2(vec)
-      if (r1 < eps) cycle
+      if (exclude_self .and. r1 < eps) cycle
       r2 = r1 * r1
-      gtmp = +2 * gam * exp(-r2 * gam2) / (sqrtpi * r2) - erf(r1 * gam) / (r2 * r1)
-      atmp = -2 * alp * exp(-r2 * alp2) / (sqrtpi * r2) + erf(r1 * alp) / (r2 * r1)
-      dg(:) = dg + (gtmp + atmp) * vec
-      ds(:, :) = ds + (gtmp + atmp) * spread(vec, 1, 3) * spread(vec, 2, 3)
+      if (kmax * r1 < 1.0e-2_wp) then
+         dtmp = (2.0_wp / sqrtpi) * (-2.0_wp * (gam**3 - alp**3) / 3.0_wp &
+            & + 0.4_wp * (gam**5 - alp**5) * r2 &
+            & - ((gam**7 - alp**7) / 7.0_wp) * r2 * r2)
+      else
+         gtmp = +2 * gam * exp(-r2 * gam2) / (sqrtpi * r2) - erf(r1 * gam) / (r2 * r1)
+         atmp = -2 * alp * exp(-r2 * alp2) / (sqrtpi * r2) + erf(r1 * alp) / (r2 * r1)
+         dtmp = gtmp + atmp
+      end if
+      dg(:) = dg + dtmp * vec
+      ds(:, :) = ds + dtmp * spread(vec, 1, 3) * spread(vec, 2, 3)
    end do
 
 end subroutine get_damat_dir_3d
@@ -1089,7 +1121,7 @@ subroutine get_damat_2d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace, error)
       gam = 1.0_wp / sqrt(self%rad(izp)**2 + self%rad(jzp)**2)
       if (iat == jat) then
          vec = 0.0_wp
-         call get_damat_dir_3d(vec, gam, alpha, dtrans, dGd, dSd)
+         call get_damat_dir_3d(vec, gam, alpha, dtrans, dGd, dSd, skip_zero=.true.)
          call get_damat_rec_2d(vec, alpha, area, n_hat, rtrans, dGr, dSr)
          dS = dSd + dSr
          dadL(:, :, iat) = dadL(:, :, iat) + dS * qvec(iat)
@@ -1097,7 +1129,7 @@ subroutine get_damat_2d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace, error)
          wsw = 1.0_wp / real(wsc%nimg(jat, iat), wp)
          do img = 1, wsc%nimg(jat, iat)
             vec = mol%xyz(:, jat) - mol%xyz(:, iat) + wsc%trans(:, wsc%tridx(img, jat, iat))
-            call get_damat_dir_3d(vec, gam, alpha, dtrans, dGd, dSd)
+            call get_damat_dir_3d(vec, gam, alpha, dtrans, dGd, dSd, skip_zero=.false.)
             call get_damat_rec_2d(vec, alpha, area, n_hat, rtrans, dGr, dSr)
             dG = dG + (dGd + dGr) * wsw
             dS = dS + (dSd + dSr) * wsw
@@ -1221,7 +1253,7 @@ subroutine get_damat_1d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace, error)
       gam = 1.0_wp / sqrt(self%rad(izp)**2 + self%rad(jzp)**2)
       if (iat == jat) then
          vec = 0.0_wp
-         call get_damat_dir_3d(vec, gam, alpha, dtrans, dGd, dSd)
+         call get_damat_dir_3d(vec, gam, alpha, dtrans, dGd, dSd, skip_zero=.true.)
          call get_damat_rec_1d(vec, alpha, len1, u_hat, rtrans, dGr, dSr)
          dS = dSd + dSr
          dadL(:, :, iat) = dadL(:, :, iat) + dS * qvec(iat)
@@ -1229,7 +1261,7 @@ subroutine get_damat_1d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace, error)
          wsw = 1.0_wp / real(wsc%nimg(jat, iat), wp)
          do img = 1, wsc%nimg(jat, iat)
             vec = mol%xyz(:, jat) - mol%xyz(:, iat) + wsc%trans(:, wsc%tridx(img, jat, iat))
-            call get_damat_dir_3d(vec, gam, alpha, dtrans, dGd, dSd)
+            call get_damat_dir_3d(vec, gam, alpha, dtrans, dGd, dSd, skip_zero=.false.)
             call get_damat_rec_1d(vec, alpha, len1, u_hat, rtrans, dGr, dSr)
             dG = dG + (dGd + dGr) * wsw
             dS = dS + (dSd + dSr) * wsw
