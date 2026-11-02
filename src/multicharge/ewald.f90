@@ -773,7 +773,7 @@ pure subroutine fast_k012_1d(x, y, k0, k1, k2)
    !> Integral K2(x, y) = d^2K0/dy^2
    real(wp), intent(out) :: k2
 
-   real(wp) :: w0, psi_min, w_max, s0, s1, s2
+   real(wp) :: w0, psi_min, s_cut, w_min, w_max, s0, s1, s2
 
    if (y > x) then
       w0 = 0.5_wp * log(y / x)
@@ -790,7 +790,8 @@ pure subroutine fast_k012_1d(x, y, k0, k1, k2)
       return
    end if
 
-   w_max = log((psi_min + 42.0_wp) / x)
+   s_cut = psi_min + 44.0_wp
+   w_max = log((s_cut + sqrt(max(0.0_wp, s_cut * s_cut - 4.0_wp * x * y))) / (2.0_wp * x))
    if (w_max <= 0.0_wp) then
       k0 = 0.0_wp
       k1 = 0.0_wp
@@ -799,7 +800,8 @@ pure subroutine fast_k012_1d(x, y, k0, k1, k2)
    end if
 
    if (w0 > 0.0_wp .and. w0 < w_max) then
-      call integrate_k012_interval(x, y, 0.0_wp, w0, k0, k1, k2)
+      w_min = max(0.0_wp, log(y / (psi_min + 52.0_wp)))
+      call integrate_k012_interval(x, y, w_min, w0, k0, k1, k2)
       call integrate_k012_interval(x, y, w0, w_max, s0, s1, s2)
       k0 = k0 + s0
       k1 = k1 + s1
@@ -831,7 +833,7 @@ pure subroutine integrate_k012_interval(x, y, a_start, b_end, s0, s1, s2)
    integer :: n_sub, isub, q
    real(wp) :: h, a_sub, wt, w, ew, emw, val
 
-   n_sub = max(1, ceiling((b_end - a_start) / 0.5_wp))
+   n_sub = max(4, ceiling((b_end - a_start) / 0.25_wp))
    h = (b_end - a_start) / real(n_sub, wp)
    s0 = 0.0_wp
    s1 = 0.0_wp

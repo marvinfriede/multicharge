@@ -22,7 +22,8 @@ module test_pbc
    use mstore, only: get_structure
    use multicharge, only: get_charges, add_charge_hessian
    use multicharge_ewald, only: get_ewald_dir_trans_1d, get_ewald_rec_trans_1d, &
-      & get_ewald_dir_trans_2d, get_ewald_rec_trans_2d
+      & get_ewald_dir_trans_2d, get_ewald_rec_trans_2d, fast_f012_1d, &
+      & fast_k012_1d, erfc_exp_2d
    use multicharge_model, only: mchrg_model_type
    use multicharge_model_cache, only: cache_container
    use multicharge_model_eeq, only: eeq_cache
@@ -73,6 +74,7 @@ subroutine collect_pbc(testsuite)
       & new_unittest("eeqbc-convergence-1d-2d", test_eeqbc_convergence_1d_2d), &
       & new_unittest("eeqbc-water-helium-358", test_eeqbc_water_helium_358), &
       & new_unittest("eeq-3d-slab-285", test_eeq_3d_slab_285), &
+      & new_unittest("special-functions-1d-2d", test_special_functions_1d_2d), &
       & new_unittest("degenerate-lattice-error", test_degenerate_lattice_error) &
       & ]
 
@@ -1198,8 +1200,8 @@ subroutine test_eeqbc_1d_all_masks(error)
             return
          end if
 
-         ! Full derivative validation for TFF (neutral) and FTF (charged)
-         if ((iq == 1 .and. imask == 1) .or. (iq == 2 .and. imask == 2)) then
+         ! Full derivative validation across all 1D masks: TFF, FTF (neutral) and FFT (charged)
+         if ((iq == 1 .and. imask <= 2) .or. (iq == 2 .and. imask == 3)) then
             call test_dbdr(error, mol, model)
             if (allocated(error)) return
             call test_dbdL(error, mol, model)
@@ -1290,8 +1292,8 @@ subroutine test_eeqbc_2d_all_masks(error)
             return
          end if
 
-         ! Full derivative validation for TTF (neutral) and FTT (charged)
-         if ((iq == 1 .and. imask == 1) .or. (iq == 2 .and. imask == 3)) then
+         ! Full derivative validation across all 2D masks: TTF, TFT (neutral) and FTT (charged)
+         if ((iq == 1 .and. imask <= 2) .or. (iq == 2 .and. imask == 3)) then
             call test_dbdr(error, mol, model)
             if (allocated(error)) return
             call test_dbdL(error, mol, model)
@@ -1418,25 +1420,23 @@ subroutine test_eeq_2d_all_masks(error)
          return
       end if
 
-      ! Full derivative validation for TTF and TFT
-      if (imask <= 2) then
-         call test_dbdr(error, mol, model)
-         if (allocated(error)) return
-         call test_dbdL(error, mol, model)
-         if (allocated(error)) return
-         call test_dadr(error, mol, model)
-         if (allocated(error)) return
-         call test_dadL(error, mol, model)
-         if (allocated(error)) return
-         call test_numgrad(error, mol, model)
-         if (allocated(error)) return
-         call test_numsigma(error, mol, model)
-         if (allocated(error)) return
-         call test_numdqdr(error, mol, model)
-         if (allocated(error)) return
-         call test_numdqdL(error, mol, model)
-         if (allocated(error)) return
-      end if
+      ! Full derivative validation for all 2D masks (TTF, TFT, FTT)
+      call test_dbdr(error, mol, model)
+      if (allocated(error)) return
+      call test_dbdL(error, mol, model)
+      if (allocated(error)) return
+      call test_dadr(error, mol, model)
+      if (allocated(error)) return
+      call test_dadL(error, mol, model)
+      if (allocated(error)) return
+      call test_numgrad(error, mol, model)
+      if (allocated(error)) return
+      call test_numsigma(error, mol, model)
+      if (allocated(error)) return
+      call test_numdqdr(error, mol, model)
+      if (allocated(error)) return
+      call test_numdqdL(error, mol, model)
+      if (allocated(error)) return
    end do
 
    ! Charged 2D EEQ cell must be explicitly rejected
@@ -1511,25 +1511,23 @@ subroutine test_eeq_1d_all_masks(error)
          return
       end if
 
-      ! Full derivative validation for TFF and FTF
-      if (imask <= 2) then
-         call test_dbdr(error, mol, model)
-         if (allocated(error)) return
-         call test_dbdL(error, mol, model)
-         if (allocated(error)) return
-         call test_dadr(error, mol, model)
-         if (allocated(error)) return
-         call test_dadL(error, mol, model)
-         if (allocated(error)) return
-         call test_numgrad(error, mol, model)
-         if (allocated(error)) return
-         call test_numsigma(error, mol, model)
-         if (allocated(error)) return
-         call test_numdqdr(error, mol, model)
-         if (allocated(error)) return
-         call test_numdqdL(error, mol, model)
-         if (allocated(error)) return
-      end if
+      ! Full derivative validation for all 1D masks (TFF, FTF, FFT)
+      call test_dbdr(error, mol, model)
+      if (allocated(error)) return
+      call test_dbdL(error, mol, model)
+      if (allocated(error)) return
+      call test_dadr(error, mol, model)
+      if (allocated(error)) return
+      call test_dadL(error, mol, model)
+      if (allocated(error)) return
+      call test_numgrad(error, mol, model)
+      if (allocated(error)) return
+      call test_numsigma(error, mol, model)
+      if (allocated(error)) return
+      call test_numdqdr(error, mol, model)
+      if (allocated(error)) return
+      call test_numdqdL(error, mol, model)
+      if (allocated(error)) return
    end do
 
    ! Charged 1D EEQ cell must be explicitly rejected
@@ -2273,5 +2271,77 @@ subroutine test_eeq_3d_slab_285(error)
    end if
 
 end subroutine test_eeq_3d_slab_285
+
+!> Verify 1D and 2D special-function accuracy (fast_f012_1d, fast_k012_1d, erfc_exp_2d)
+!> against 50-digit mpmath reference values across small, moderate, and large arguments.
+subroutine test_special_functions_1d_2d(error)
+   type(error_type), allocatable, intent(out) :: error
+
+   real(wp), parameter :: u_pts(6) = [ &
+      & 0.0_wp, 1.0e-8_wp, 0.5_wp, 4.0_wp, 4.000001_wp, 25.0_wp]
+   real(wp), parameter :: f0_ref(6) = [ &
+      & 0.0_wp, 9.9999999750000000556e-9_wp, 0.44384207911774836294_wp, &
+      & 1.9672893784312723859_wp, 1.9672896238523342756_wp, 3.7960914897702684998_wp]
+   real(wp), parameter :: f1_ref(6) = [ &
+      & 1.0_wp, 0.99999999500000001667_wp, 0.78693868057473315279_wp, &
+      & 0.24542109027781645493_wp, 0.24542103350146551229_wp, 0.039999999999444482245_wp]
+   real(wp), parameter :: f2_ref(6) = [ &
+      & -0.5_wp, -0.49999999666666667917_wp, -0.36081604172419945838_wp, &
+      & -0.056776362847270568658_wp, -0.056776339038005506227_wp, -0.0015999999994222615352_wp]
+
+   real(wp), parameter :: x_pts(5) = [1.0e-8_wp, 1.0e-4_wp, 0.5_wp, 2.0_wp, 10.0_wp]
+   real(wp), parameter :: y_pts(5) = [0.0_wp, 1.0e-2_wp, 0.5_wp, 0.1_wp, 25.0_wp]
+   real(wp), parameter :: k0_ref(5) = [ &
+      & 17.843465089050832587_wp, 8.6232592773087082697_wp, 0.42102443824070833334_wp, &
+      & 0.045293668272415987242_wp, 8.1625283072617411727e-15_wp]
+   real(wp), parameter :: k1_ref(5) = [ &
+      & 0.99999981156534915949_wp, 0.99405430461170725993_wp, 0.23402778902579225314_wp, &
+      & 0.034642560210863181845_wp, 5.2280069047533075135e-15_wp]
+   real(wp), parameter :: k2_ref(5) = [ &
+      & 0.49999999000000096717_wp, 0.49657968235608294261_wp, 0.15332113394940819643_wp, &
+      & 0.027734685027132461108_wp, 3.4489111320542408121e-15_wp]
+
+   real(wp) :: f0, f1, f2, k0, k1, k2, v_2d
+   integer :: i
+
+   do i = 1, size(u_pts)
+      call fast_f012_1d(u_pts(i), f0, f1, f2)
+      if (abs(f0 - f0_ref(i)) > 1.0e-14_wp * max(1.0_wp, abs(f0_ref(i))) &
+         & .or. abs(f1 - f1_ref(i)) > 1.0e-14_wp * max(1.0_wp, abs(f1_ref(i))) &
+         & .or. abs(f2 - f2_ref(i)) > 1.0e-14_wp * max(1.0_wp, abs(f2_ref(i)))) then
+         call test_failed(error, "fast_f012_1d deviates from 50-digit reference")
+         return
+      end if
+   end do
+
+   do i = 1, size(x_pts)
+      call fast_k012_1d(x_pts(i), y_pts(i), k0, k1, k2)
+      if (abs(k0 - k0_ref(i)) > 2.0e-14_wp * max(1.0e-15_wp, abs(k0_ref(i))) &
+         & .or. abs(k1 - k1_ref(i)) > 2.0e-14_wp * max(1.0e-15_wp, abs(k1_ref(i))) &
+         & .or. abs(k2 - k2_ref(i)) > 2.0e-14_wp * max(1.0e-15_wp, abs(k2_ref(i)))) then
+         call test_failed(error, "fast_k012_1d deviates from 50-digit reference")
+         return
+      end if
+   end do
+
+   v_2d = erfc_exp_2d(2.0_wp, -1.0_wp, 0.35_wp)
+   if (abs(v_2d - 0.00005300645451857405009_wp) > 1.0e-14_wp * 0.00005300645451857405009_wp) then
+      call test_failed(error, "erfc_exp_2d (u > 0) deviates from 50-digit reference")
+      return
+   end if
+
+   v_2d = erfc_exp_2d(0.5_wp, -5.0_wp, 0.35_wp)
+   if (abs(v_2d - 0.15243208859081749745_wp) > 1.0e-14_wp * 0.15243208859081749745_wp) then
+      call test_failed(error, "erfc_exp_2d (u < 0) deviates from 50-digit reference")
+      return
+   end if
+
+   v_2d = erfc_exp_2d(5.0_wp, 20.0_wp, 0.35_wp)
+   if (abs(v_2d - 1.4504329021329886148e-45_wp) > 5.0e-14_wp * 1.4504329021329886148e-45_wp) then
+      call test_failed(error, "erfc_exp_2d (large positive Gs) deviates from 50-digit reference")
+      return
+   end if
+
+end subroutine test_special_functions_1d_2d
 
 end module test_pbc

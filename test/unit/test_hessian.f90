@@ -72,7 +72,7 @@ subroutine test_eeq_periodic(error)
       call run_case(error, .false., icase)
       if (allocated(error)) return
    end do
-   do icase = 12, 15
+   do icase = 12, 17
       call run_case(error, .false., icase)
       if (allocated(error)) return
    end do
@@ -81,7 +81,7 @@ end subroutine test_eeq_periodic
 subroutine test_eeqbc_periodic(error)
    type(error_type), allocatable, intent(out) :: error
    integer :: icase
-   do icase = 5, 15
+   do icase = 5, 17
       call run_case(error, .true., icase)
       if (allocated(error)) return
    end do
@@ -178,6 +178,22 @@ subroutine run_case(error, bond_capacity, icase)
       mol%lattice = reshape([0.0_wp, 0.0_wp, 0.0_wp, 0.4_wp, 5.3_wp, -0.3_wp, &
          & 0.0_wp, 0.0_wp, 0.0_wp], [3, 3])
       mol%periodic = [.false., .true., .false.]
+   case(16)
+      ! 1D periodic wire (FFT), neutral, rotated periodic vector
+      call new(mol, [30, 8, 1], reshape([ &
+         & 0.0_wp, 0.0_wp, 0.0_wp, -0.2_wp, 0.3_wp, 2.3_wp, &
+         & 1.4_wp, -0.5_wp, 1.1_wp], [3, 3]), charge=0.0_wp)
+      mol%lattice = reshape([0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, &
+         & -0.3_wp, 0.4_wp, 5.4_wp], [3, 3])
+      mol%periodic = [.false., .false., .true.]
+   case(17)
+      ! 2D periodic slab (FTT), neutral, skewed periodic basis
+      call new(mol, [30, 8, 1], reshape([ &
+         & -0.2_wp, 0.0_wp, 0.0_wp, 0.3_wp, 2.4_wp, 0.2_wp, &
+         & 0.4_wp, 0.5_wp, 2.1_wp], [3, 3]), charge=0.0_wp)
+      mol%lattice = reshape([0.0_wp, 0.0_wp, 0.0_wp, 0.1_wp, 5.3_wp, 0.3_wp, &
+         & -0.2_wp, 0.6_wp, 6.2_wp], [3, 3])
+      mol%periodic = [.false., .true., .true.]
    case default
       call test_failed(error, "Unknown charge Hessian test case")
       return
