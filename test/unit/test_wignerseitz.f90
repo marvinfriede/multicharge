@@ -47,7 +47,8 @@ subroutine collect_wignerseitz(testsuite)
       & new_unittest("wignerseitz-cell-1d", test_wsc_1d), &
       & new_unittest("wignerseitz-cell-2d", test_wsc_2d), &
       & new_unittest("wignerseitz-cell-3d", test_wsc_3d), &
-      & new_unittest("wignerseitz-self-images", test_self_images) &
+      & new_unittest("wignerseitz-self-images", test_self_images), &
+      & new_unittest("wignerseitz-robustness-1d-2d", test_wsc_robustness_1d_2d) &
       & ]
 
 end subroutine collect_wignerseitz
@@ -364,5 +365,122 @@ subroutine test_wsc_2d(error)
       return
    end if
 end subroutine test_wsc_2d
+
+subroutine test_wsc_robustness_1d_2d(error)
+   type(error_type), allocatable, intent(out) :: error
+   type(structure_type) :: mol_ref, mol_test
+   type(wignerseitz_cell) :: wsc_ref, wsc_test
+   real(wp) :: a1(3), a2(3), lat_ref(3, 3), lat_test(3, 3), xyz_ref(3, 3), xyz_test(3, 3)
+   real(wp) :: v_ref(3), v_test(3)
+   integer :: iat, jat
+
+   ! 1. 1D wire rotated in 3D space with zero nonperiodic lattice columns
+   !    and multi-cell atom translations (|n| > 1)
+   a1 = [3.0_wp, 4.0_wp, 12.0_wp]
+   lat_ref = 0.0_wp
+   lat_ref(:, 2) = a1
+   xyz_ref = reshape([ &
+      & 0.1_wp, 0.2_wp, -0.3_wp, &
+      & 1.1_wp, 1.4_wp,  3.5_wp, &
+      & -0.8_wp, -0.9_wp, -2.5_wp], [3, 3])
+   xyz_test = xyz_ref
+   xyz_test(:, 2) = xyz_test(:, 2) + 5.0_wp * a1
+   xyz_test(:, 3) = xyz_test(:, 3) - 4.0_wp * a1
+
+   call new(mol_ref, [6, 8, 1], xyz_ref, lattice=lat_ref, periodic=[.false., .true., .false.])
+   call new(mol_test, [6, 8, 1], xyz_test, lattice=lat_ref, periodic=[.false., .true., .false.])
+   call init_wignerseitz_cell(wsc_ref, mol_ref)
+   call init_wignerseitz_cell(wsc_test, mol_test)
+
+   do iat = 1, 3
+      do jat = 1, 3
+         call check(error, wsc_test%nimg(jat, iat), wsc_ref%nimg(jat, iat))
+         if (allocated(error)) return
+         if (iat /= jat) then
+            v_ref = mol_ref%xyz(:, jat) - mol_ref%xyz(:, iat) &
+               & + wsc_ref%trans(:, wsc_ref%tridx(1, jat, iat))
+            v_test = mol_test%xyz(:, jat) - mol_test%xyz(:, iat) &
+               & + wsc_test%trans(:, wsc_test%tridx(1, jat, iat))
+            if (maxval(abs(v_test - v_ref)) > 1.0e-12_wp) then
+               call test_failed(error, "1D WSC failed for multi-cell atom displacement")
+               return
+            end if
+         end if
+      end do
+   end do
+
+   ! 2. 2D slab in rotated 3D subspace with zero nonperiodic column,
+   !    skewed unimodular basis transformation (a2' = a2 + 6*a1), and multi-cell shifts
+   a1 = [4.0_wp, 3.0_wp, 0.0_wp]
+   a2 = [-3.0_wp, 4.0_wp, 5.0_wp]
+   lat_ref = 0.0_wp
+   lat_ref(:, 1) = a1
+   lat_ref(:, 3) = a2
+
+   lat_test = 0.0_wp
+   lat_test(:, 1) = a1
+   lat_test(:, 3) = a2 + 6.0_wp * a1
+
+   xyz_ref = reshape([ &
+      & 0.2_wp, -0.1_wp, 0.3_wp, &
+      & 1.4_wp,  1.2_wp, 1.1_wp, &
+      & -1.1_wp, 0.8_wp, 1.7_wp], [3, 3])
+   xyz_test = xyz_ref
+   xyz_test(:, 2) = xyz_test(:, 2) + 3.0_wp * a1 - 4.0_wp * a2
+   xyz_test(:, 3) = xyz_test(:, 3) - 5.0_wp * a1 + 2.0_wp * a2
+
+   call new(mol_ref, [6, 8, 1], xyz_ref, lattice=lat_ref, periodic=[.true., .false., .true.])
+   call new(mol_test, [6, 8, 1], xyz_test, lattice=lat_test, periodic=[.true., .false., .true.])
+   call init_wignerseitz_cell(wsc_ref, mol_ref)
+   call init_wignerseitz_cell(wsc_test, mol_test)
+
+   do iat = 1, 3
+      do jat = 1, 3
+         call check(error, wsc_test%nimg(jat, iat), wsc_ref%nimg(jat, iat))
+         if (allocated(error)) return
+         if (iat /= jat) then
+            v_ref = mol_ref%xyz(:, jat) - mol_ref%xyz(:, iat) &
+               & + wsc_ref%trans(:, wsc_ref%tridx(1, jat, iat))
+            v_test = mol_test%xyz(:, jat) - mol_test%xyz(:, iat) &
+               & + wsc_test%trans(:, wsc_test%tridx(1, jat, iat))
+            if (maxval(abs(v_test - v_ref)) > 1.0e-12_wp) then
+               call test_failed(error, &
+                  & "2D WSC failed under skewed unimodular basis and multi-cell shift")
+               return
+            end if
+         end if
+      end do
+   end do
+
+   ! 3. Exact Wigner-Seitz boundary vs small perturbation across boundary (1D and 2D)
+   lat_ref = 0.0_wp
+   lat_ref(:, 1) = [6.0_wp, 0.0_wp, 0.0_wp]
+   lat_ref(:, 2) = [0.0_wp, 6.0_wp, 0.0_wp]
+   ! Exact corner of 2D WS cell: (3.0, 3.0, 0.4) -> 4 equidistant images
+   call new(mol_ref, [8, 1], reshape([ &
+      & 0.0_wp, 0.0_wp, 0.0_wp, &
+      & 3.0_wp, 3.0_wp, 0.4_wp], [3, 2]), &
+      & lattice=lat_ref, periodic=[.true., .true., .false.])
+   call init_wignerseitz_cell(wsc_ref, mol_ref)
+   call check(error, wsc_ref%nimg(2, 1), 4)
+   if (allocated(error)) return
+
+   ! Perturb by +1e-5 Bohr across the WS boundary (previously inside old 0.3 Bohr^2 tie window)
+   call new(mol_test, [8, 1], reshape([ &
+      & 0.0_wp, 0.0_wp, 0.0_wp, &
+      & 3.0_wp + 1.0e-5_wp, 3.0_wp - 1.0e-5_wp, 0.4_wp], [3, 2]), &
+      & lattice=lat_ref, periodic=[.true., .true., .false.])
+   call init_wignerseitz_cell(wsc_test, mol_test)
+   call check(error, wsc_test%nimg(2, 1), 1)
+   if (allocated(error)) return
+   v_test = mol_test%xyz(:, 2) - mol_test%xyz(:, 1) &
+      & + wsc_test%trans(:, wsc_test%tridx(1, 2, 1))
+   if (abs(v_test(1) - (-3.0_wp + 1.0e-5_wp)) > 1.0e-12_wp &
+      & .or. abs(v_test(2) - (3.0_wp - 1.0e-5_wp)) > 1.0e-12_wp) then
+      call test_failed(error, "2D WSC selected wrong image after boundary perturbation")
+      return
+   end if
+
+end subroutine test_wsc_robustness_1d_2d
 
 end module test_wignerseitz

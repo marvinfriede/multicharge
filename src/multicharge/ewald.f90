@@ -168,6 +168,25 @@ subroutine get_alpha_1d_subspace(a1, alpha)
 end subroutine get_alpha_1d_subspace
 
 
+!> Enforce canonical sign so the first significant Cartesian component is positive
+pure subroutine canonicalize_vec_sign(v)
+   !> Vector to canonicalize in-place
+   real(wp), intent(inout) :: v(3)
+
+   real(wp) :: thr_v
+   integer :: k
+
+   thr_v = 1.0e-12_wp * maxval(abs(v))
+   do k = 1, 3
+      if (abs(v(k)) > thr_v) then
+         if (v(k) < 0.0_wp) v = -v
+         exit
+      end if
+   end do
+
+end subroutine canonicalize_vec_sign
+
+
 !> Reduce a 2D periodic lattice basis to its shortest Lagrange-Gauss basis
 pure subroutine reduce_basis_2d(a1, a2, u1, u2)
    !> First periodic lattice vector
@@ -179,7 +198,7 @@ pure subroutine reduce_basis_2d(a1, a2, u1, u2)
    !> Second reduced basis vector
    real(wp), intent(out) :: u2(3)
 
-   real(wp) :: tmp(3), n1, n2, mu
+   real(wp) :: tmp(3), n1, n2, mu, dot12
    integer :: iter
 
    u1 = a1
@@ -187,7 +206,7 @@ pure subroutine reduce_basis_2d(a1, a2, u1, u2)
    do iter = 1, 100
       n1 = dot_product(u1, u1)
       n2 = dot_product(u2, u2)
-      if (n1 > n2) then
+      if (n1 > n2 * (1.0_wp + 1.0e-12_wp)) then
          tmp = u1
          u1 = u2
          u2 = tmp
@@ -198,7 +217,14 @@ pure subroutine reduce_basis_2d(a1, a2, u1, u2)
       if (abs(mu) < 0.5_wp) exit
       u2 = u2 - mu * u1
    end do
-   if (dot_product(u1, u2) < 0.0_wp) u2 = -u2
+   call canonicalize_vec_sign(u1)
+   n1 = dot_product(u1, u1)
+   dot12 = dot_product(u1, u2)
+   if (abs(dot12) <= 1.0e-12_wp * n1) then
+      call canonicalize_vec_sign(u2)
+   else if (dot12 < 0.0_wp) then
+      u2 = -u2
+   end if
 
 end subroutine reduce_basis_2d
 

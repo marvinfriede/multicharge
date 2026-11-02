@@ -19,7 +19,7 @@ module test_pbc
       & test_failed
    use mctc_io_structure, only: structure_type, new
    use mstore, only: get_structure
-   use multicharge, only: get_charges
+   use multicharge, only: get_charges, add_charge_hessian
    use multicharge_ewald, only: get_ewald_dir_trans_1d, get_ewald_rec_trans_1d, &
       & get_ewald_dir_trans_2d, get_ewald_rec_trans_2d
    use multicharge_model, only: mchrg_model_type
@@ -69,6 +69,7 @@ subroutine collect_pbc(testsuite)
       & new_unittest("eeq-1d-all-masks", test_eeq_1d_all_masks), &
       & new_unittest("eeq-2d-all-masks", test_eeq_2d_all_masks), &
       & new_unittest("ewald-convergence-1d-2d", test_ewald_convergence_1d_2d), &
+      & new_unittest("pbc-wsc-invariance-1d-2d", test_pbc_wsc_invariance_1d_2d), &
       & new_unittest("degenerate-lattice-error", test_degenerate_lattice_error) &
       & ]
 
@@ -1742,5 +1743,155 @@ subroutine test_ewald_convergence_1d_2d(error)
    end do
 
 end subroutine test_ewald_convergence_1d_2d
+
+!> Verify Wigner-Seitz invariance under multi-cell shifts, unimodular basis transforms,
+!> and smoothness across Wigner-Seitz cell boundaries in 1D and 2D.
+subroutine test_pbc_wsc_invariance_1d_2d(error)
+   type(error_type), allocatable, intent(out) :: error
+
+   type(structure_type) :: mol_ref, mol_test, mol_m, mol_0, mol_p
+   class(mchrg_model_type), allocatable :: model
+   type(cache_container) :: cache
+   real(wp) :: a1(3), a2(3), lat_ref(3, 3), lat_test(3, 3), xyz_ref(3, 3), xyz_test(3, 3)
+   real(wp) :: q_ref(3), dqdr_ref(3, 3, 3), dqdL_ref(3, 3, 3), hess_ref(9, 9)
+   real(wp) :: q_test(3), dqdr_test(3, 3, 3), dqdL_test(3, 3, 3), hess_test(9, 9)
+   real(wp) :: q_m(2), dqdr_m(3, 2, 2), dqdL_m(3, 3, 2), hess_m(6, 6)
+   real(wp) :: q_0(2), dqdr_0(3, 2, 2), dqdL_0(3, 3, 2), hess_0(6, 6)
+   real(wp) :: q_p(2), dqdr_p(3, 2, 2), dqdL_p(3, 3, 2), hess_p(6, 6)
+   real(wp), parameter :: weights3(3) = [0.6_wp, -0.4_wp, 0.25_wp]
+   real(wp), parameter :: weights2(2) = [0.7_wp, -0.3_wp]
+
+   ! 1. 1D wire rotated in 3D space with zero nonperiodic columns and multi-cell shifts (|n| > 1)
+   a1 = [3.6_wp, 4.8_wp, 0.0_wp]
+   lat_ref = 0.0_wp
+   lat_ref(:, 3) = a1
+   xyz_ref = reshape([ &
+      & 0.0_wp,  0.0_wp,  0.1_wp, &
+      & 1.1_wp,  1.6_wp, -0.2_wp, &
+      & 2.1_wp,  2.7_wp,  0.3_wp], [3, 3])
+   xyz_test = xyz_ref
+   xyz_test(:, 2) = xyz_test(:, 2) + 4.0_wp * a1
+   xyz_test(:, 3) = xyz_test(:, 3) - 3.0_wp * a1
+
+   call new(mol_ref, [8, 1, 1], xyz_ref, charge=0.0_wp, &
+      & lattice=lat_ref, periodic=[.false., .false., .true.])
+   call new(mol_test, [8, 1, 1], xyz_test, charge=0.0_wp, &
+      & lattice=lat_ref, periodic=[.false., .false., .true.])
+
+   call new_eeq2019_model(mol_ref, model, error)
+   if (allocated(error)) return
+   call get_charges(model, mol_ref, error, q_ref, dqdr_ref, dqdL_ref, cache=cache)
+   if (allocated(error)) return
+   hess_ref = 0.0_wp
+   call add_charge_hessian(model, mol_ref, error, weights3, hess_ref, cache)
+   if (allocated(error)) return
+
+   call get_charges(model, mol_test, error, q_test, dqdr_test, dqdL_test, cache=cache)
+   if (allocated(error)) return
+   hess_test = 0.0_wp
+   call add_charge_hessian(model, mol_test, error, weights3, hess_test, cache)
+   if (allocated(error)) return
+
+   if (maxval(abs(q_test - q_ref)) > 1.0e-12_wp &
+      & .or. maxval(abs(dqdr_test - dqdr_ref)) > 1.0e-11_wp &
+      & .or. maxval(abs(dqdL_test - dqdL_ref)) > 1.0e-11_wp &
+      & .or. maxval(abs(hess_test - hess_ref)) > 1.0e-10_wp) then
+      call test_failed(error, "1D EEQ not invariant under multi-cell atom translation")
+      return
+   end if
+
+   ! 2. 2D slab in rotated 3D subspace with zero nonperiodic column,
+   !    skewed unimodular basis transformation (a2' = a2 + 5*a1), and multi-cell shifts
+   a1 = [5.5_wp, 0.0_wp, 0.0_wp]
+   a2 = [0.5_wp, 6.0_wp, 2.0_wp]
+   lat_ref = 0.0_wp
+   lat_ref(:, 1) = a1
+   lat_ref(:, 3) = a2
+   lat_test = 0.0_wp
+   lat_test(:, 1) = a1
+   lat_test(:, 3) = a2 + 5.0_wp * a1
+
+   xyz_ref = reshape([ &
+      & 0.1_wp, 0.2_wp, -0.1_wp, &
+      & 1.7_wp, 0.6_wp,  0.3_wp, &
+      & 0.3_wp, 1.8_wp,  0.5_wp], [3, 3])
+   xyz_test = xyz_ref
+   xyz_test(:, 2) = xyz_test(:, 2) + 3.0_wp * a1 - 2.0_wp * a2
+   xyz_test(:, 3) = xyz_test(:, 3) - 4.0_wp * a1 + 3.0_wp * a2
+
+   call new(mol_ref, [8, 1, 1], xyz_ref, charge=0.0_wp, &
+      & lattice=lat_ref, periodic=[.true., .false., .true.])
+   call new(mol_test, [8, 1, 1], xyz_test, charge=0.0_wp, &
+      & lattice=lat_test, periodic=[.true., .false., .true.])
+
+   call get_charges(model, mol_ref, error, q_ref, dqdr_ref, dqdL_ref, cache=cache)
+   if (allocated(error)) return
+   hess_ref = 0.0_wp
+   call add_charge_hessian(model, mol_ref, error, weights3, hess_ref, cache)
+   if (allocated(error)) return
+
+   call get_charges(model, mol_test, error, q_test, dqdr_test, dqdL_test, cache=cache)
+   if (allocated(error)) return
+   hess_test = 0.0_wp
+   call add_charge_hessian(model, mol_test, error, weights3, hess_test, cache)
+   if (allocated(error)) return
+
+   if (maxval(abs(q_test - q_ref)) > 1.0e-11_wp &
+      & .or. maxval(abs(dqdr_test - dqdr_ref)) > 1.0e-10_wp &
+      & .or. maxval(abs(dqdL_test - dqdL_ref)) > 1.0e-10_wp &
+      & .or. maxval(abs(hess_test - hess_ref)) > 1.0e-9_wp) then
+      call test_failed(error, &
+         & "2D EEQ not invariant under unimodular basis transform and multi-cell shift")
+      return
+   end if
+
+   ! 3. Smoothness across a 2D Wigner-Seitz cell boundary (x = L/2 - 1e-6, L/2, L/2 + 1e-6)
+   lat_ref = 0.0_wp
+   lat_ref(:, 1) = [6.0_wp, 0.0_wp, 0.0_wp]
+   lat_ref(:, 2) = [0.0_wp, 6.0_wp, 0.0_wp]
+   call new(mol_m, [8, 1], reshape([ &
+      & 0.0_wp, 0.0_wp, 0.0_wp, &
+      & 3.0_wp - 1.0e-6_wp, 1.2_wp, 0.4_wp], [3, 2]), charge=0.0_wp, &
+      & lattice=lat_ref, periodic=[.true., .true., .false.])
+   call new(mol_0, [8, 1], reshape([ &
+      & 0.0_wp, 0.0_wp, 0.0_wp, &
+      & 3.0_wp, 1.2_wp, 0.4_wp], [3, 2]), charge=0.0_wp, &
+      & lattice=lat_ref, periodic=[.true., .true., .false.])
+   call new(mol_p, [8, 1], reshape([ &
+      & 0.0_wp, 0.0_wp, 0.0_wp, &
+      & 3.0_wp + 1.0e-6_wp, 1.2_wp, 0.4_wp], [3, 2]), charge=0.0_wp, &
+      & lattice=lat_ref, periodic=[.true., .true., .false.])
+
+   deallocate(model)
+   call new_eeq2019_model(mol_0, model, error)
+   if (allocated(error)) return
+
+   call get_charges(model, mol_m, error, q_m, dqdr_m, dqdL_m, cache=cache)
+   if (allocated(error)) return
+   hess_m = 0.0_wp
+   call add_charge_hessian(model, mol_m, error, weights2, hess_m, cache)
+   if (allocated(error)) return
+
+   call get_charges(model, mol_0, error, q_0, dqdr_0, dqdL_0, cache=cache)
+   if (allocated(error)) return
+   hess_0 = 0.0_wp
+   call add_charge_hessian(model, mol_0, error, weights2, hess_0, cache)
+   if (allocated(error)) return
+
+   call get_charges(model, mol_p, error, q_p, dqdr_p, dqdL_p, cache=cache)
+   if (allocated(error)) return
+   hess_p = 0.0_wp
+   call add_charge_hessian(model, mol_p, error, weights2, hess_p, cache)
+   if (allocated(error)) return
+
+   if (maxval(abs(0.5_wp * (q_m + q_p) - q_0)) > 1.0e-10_wp &
+      & .or. maxval(abs(0.5_wp * (dqdr_m + dqdr_p) - dqdr_0)) > 1.0e-9_wp &
+      & .or. maxval(abs(0.5_wp * (dqdL_m + dqdL_p) - dqdL_0)) > 1.0e-9_wp &
+      & .or. maxval(abs(0.5_wp * (hess_m + hess_p) - hess_0)) > 1.0e-8_wp) then
+      call test_failed(error, "2D EEQ exhibits discontinuity across Wigner-Seitz boundary")
+      return
+   end if
+
+end subroutine test_pbc_wsc_invariance_1d_2d
 
 end module test_pbc

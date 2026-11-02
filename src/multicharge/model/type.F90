@@ -32,6 +32,7 @@ module multicharge_model_type
    use mctc_ncoord, only: ncoord_type
    use mctc_wignerseitz, only: wignerseitz_cell
    use multicharge_blas, only: gemv, symv, gemm
+   use multicharge_ewald, only: reduce_basis_2d
    use multicharge_lapack, only: sytrf, sytrs, sytri
    use multicharge_model_cache, only: model_cache, cache_container
    implicit none
@@ -230,8 +231,69 @@ subroutine check_structure(mol, error)
    end select
 end subroutine check_structure
 
+!> Bound multi-cell integer coordinate offsets of atom pairs in the periodic basis
+pure subroutine get_cell_shift_rep(mol, ndim, p_axes, u1, u2, rep_extra)
+   !> Molecular structure data
+   type(structure_type), intent(in) :: mol
+   !> Number of periodic dimensions
+   integer, intent(in) :: ndim
+   !> Indices of active periodic axes
+   integer, intent(in) :: p_axes(3)
+   !> First reduced periodic basis vector (used for 1D/2D)
+   real(wp), intent(in) :: u1(3)
+   !> Second reduced periodic basis vector (used for 2D)
+   real(wp), intent(in) :: u2(3)
+   !> Extra integer translation shells per axis
+   integer, intent(out) :: rep_extra(3)
+
+   integer :: iat, jat
+   real(wp) :: rij(3), l11, g11, g22, g12, det, b1, b2, s1, s2
+   real(wp), parameter :: tol_deg = 1.0e-10_wp
+   real(wp), parameter :: tol_cell = 1.0_wp + 1.0e-6_wp
+
+   rep_extra = 0
+   if (mol%nat <= 1) return
+
+   select case (ndim)
+   case (1)
+      l11 = dot_product(u1, u1)
+      if (l11 <= tol_deg) return
+      do iat = 1, mol%nat
+         do jat = 1, iat - 1
+            rij = mol%xyz(:, iat) - mol%xyz(:, jat)
+            s1 = abs(dot_product(rij, u1) / l11)
+            if (s1 > tol_cell) then
+               rep_extra(p_axes(1)) = max(rep_extra(p_axes(1)), ceiling(s1 - 0.5_wp))
+            end if
+         end do
+      end do
+   case (2)
+      g11 = dot_product(u1, u1)
+      g22 = dot_product(u2, u2)
+      g12 = dot_product(u1, u2)
+      det = g11 * g22 - g12 * g12
+      if (g11 <= tol_deg .or. g22 <= tol_deg .or. det <= tol_deg * g11 * g22) return
+      do iat = 1, mol%nat
+         do jat = 1, iat - 1
+            rij = mol%xyz(:, iat) - mol%xyz(:, jat)
+            b1 = dot_product(rij, u1)
+            b2 = dot_product(rij, u2)
+            s1 = abs((g22 * b1 - g12 * b2) / det)
+            s2 = abs((g11 * b2 - g12 * b1) / det)
+            if (s1 > tol_cell) then
+               rep_extra(p_axes(1)) = max(rep_extra(p_axes(1)), ceiling(s1 - 0.5_wp))
+            end if
+            if (s2 > tol_cell) then
+               rep_extra(p_axes(2)) = max(rep_extra(p_axes(2)), ceiling(s2 - 0.5_wp))
+            end if
+         end do
+      end do
+   end select
+
+end subroutine get_cell_shift_rep
+
 !> Generate direct lattice translation vectors strictly in the periodic subspace
-subroutine get_dir_trans(mol, trans, cutoff)
+subroutine get_dir_trans(mol, trans, cutoff, wsc_wrapped)
    !> Molecular structure data
    type(structure_type), intent(in) :: mol
 
@@ -241,17 +303,25 @@ subroutine get_dir_trans(mol, trans, cutoff)
    !> Optional lattice-vector cutoff
    real(wp), intent(in), optional :: cutoff
 
-   integer :: ndim, p_axes(3), rep(3)
-   real(wp) :: eff_lat(3, 3), a1(3), a2(3), len1, len2, area
+   !> Whether pair displacements are already wrapped into the Wigner-Seitz cell
+   logical, intent(in), optional :: wsc_wrapped
+
+   integer :: ndim, p_axes(3), rep(3), rep_extra(3)
+   real(wp) :: eff_lat(3, 3), a1(3), a2(3), u1(3), u2(3), len1, len2, area
    real(wp), parameter :: tol_deg = 1.0e-10_wp
+   logical :: need_shift_rep
 
    if (.not. allocated(mol%periodic)) then
       allocate(trans(3, 1), source=0.0_wp)
       return
    end if
 
+   need_shift_rep = .true.
+   if (present(wsc_wrapped)) need_shift_rep = .not. wsc_wrapped
+
    call get_periodic_axes(mol%periodic, ndim, p_axes)
    rep = 0
+   rep_extra = 0
    eff_lat = 0.0_wp
 
    select case (ndim)
@@ -261,30 +331,33 @@ subroutine get_dir_trans(mol, trans, cutoff)
    case (1)
       a1 = mol%lattice(:, p_axes(1))
       eff_lat(:, p_axes(1)) = a1
+      if (need_shift_rep) call get_cell_shift_rep(mol, ndim, p_axes, a1, a1, rep_extra)
       if (present(cutoff)) then
          len1 = norm2(a1)
          if (len1 > tol_deg) then
-            rep(p_axes(1)) = ceiling(cutoff / len1)
+            rep(p_axes(1)) = ceiling(cutoff / len1) + rep_extra(p_axes(1))
          end if
       else
-         rep(p_axes(1)) = 2
+         rep(p_axes(1)) = 2 + rep_extra(p_axes(1))
       end if
    case (2)
       a1 = mol%lattice(:, p_axes(1))
       a2 = mol%lattice(:, p_axes(2))
-      eff_lat(:, p_axes(1)) = a1
-      eff_lat(:, p_axes(2)) = a2
+      call reduce_basis_2d(a1, a2, u1, u2)
+      eff_lat(:, p_axes(1)) = u1
+      eff_lat(:, p_axes(2)) = u2
+      if (need_shift_rep) call get_cell_shift_rep(mol, ndim, p_axes, u1, u2, rep_extra)
       if (present(cutoff)) then
-         len1 = norm2(a1)
-         len2 = norm2(a2)
-         area = norm2(cross_product_3d(a1, a2))
+         len1 = norm2(u1)
+         len2 = norm2(u2)
+         area = norm2(cross_product_3d(u1, u2))
          if (len1 > tol_deg .and. len2 > tol_deg .and. area > tol_deg * len1 * len2) then
-            rep(p_axes(1)) = ceiling(cutoff * len2 / area)
-            rep(p_axes(2)) = ceiling(cutoff * len1 / area)
+            rep(p_axes(1)) = ceiling(cutoff * len2 / area) + rep_extra(p_axes(1))
+            rep(p_axes(2)) = ceiling(cutoff * len1 / area) + rep_extra(p_axes(2))
          end if
       else
-         rep(p_axes(1)) = 2
-         rep(p_axes(2)) = 2
+         rep(p_axes(1)) = 2 + rep_extra(p_axes(1))
+         rep(p_axes(2)) = 2 + rep_extra(p_axes(2))
       end if
    case (3)
       eff_lat = mol%lattice
@@ -308,10 +381,18 @@ subroutine init_wignerseitz_cell(self, mol)
    type(structure_type), intent(in) :: mol
 
    real(wp), parameter :: thr = sqrt(epsilon(0.0_wp))
-   integer :: iat, jat, ntr, nimg
+   real(wp), parameter :: tol_lowd = 1.0e-8_wp
+   integer :: iat, jat, ntr, nimg, ndim, p_axes(3)
    integer, allocatable :: tridx(:)
    real(wp) :: vec(3)
    real(wp), allocatable :: trans(:, :)
+   logical :: use_lowd_tol
+
+   use_lowd_tol = .false.
+   if (allocated(mol%periodic)) then
+      call get_periodic_axes(mol%periodic, ndim, p_axes)
+      use_lowd_tol = (ndim == 1 .or. ndim == 2)
+   end if
 
    call get_dir_trans(mol, trans, thr)
    ntr = size(trans, 2)
@@ -319,11 +400,15 @@ subroutine init_wignerseitz_cell(self, mol)
       & tridx(ntr))
 
    !$omp parallel do default(none) schedule(runtime) collapse(2) &
-   !$omp shared(mol, trans, self) private(iat, jat, vec, nimg, tridx)
+   !$omp shared(mol, trans, self, use_lowd_tol) private(iat, jat, vec, nimg, tridx)
    do iat = 1, mol%nat
       do jat = 1, mol%nat
          vec(:) = mol%xyz(:, iat) - mol%xyz(:, jat)
-         call get_wsc_pairs(nimg, trans, vec, tridx)
+         if (use_lowd_tol) then
+            call get_wsc_pairs(nimg, trans, vec, tridx, tol=tol_lowd)
+         else
+            call get_wsc_pairs(nimg, trans, vec, tridx)
+         end if
          self%nimg(jat, iat) = nimg
          self%tridx(:, jat, iat) = tridx
       end do
@@ -336,7 +421,7 @@ end subroutine init_wignerseitz_cell
 
 !> Find periodic images with minimum distance for Wigner-Seitz cell construction.
 !> Safe for 1D/2D where all candidate images may be equidistant.
-pure subroutine get_wsc_pairs(iws, trans, rij, list)
+pure subroutine get_wsc_pairs(iws, trans, rij, list, tol)
    !> Number of equivalent minimum-distance images
    integer, intent(out) :: iws
    !> Lattice translation vectors
@@ -345,14 +430,16 @@ pure subroutine get_wsc_pairs(iws, trans, rij, list)
    real(wp), intent(in) :: rij(3)
    !> Indices of equivalent minimum-distance images in trans
    integer, intent(out) :: list(:)
+   !> Optional relative squared-distance tie tolerance (defaults to legacy 0.3 Bohr^2)
+   real(wp), intent(in), optional :: tol
 
    integer :: itr, img, pos
    integer, allocatable :: index(:)
    logical, allocatable :: mask(:)
    real(wp), allocatable :: dist(:)
-   real(wp) :: vec(3), r2
+   real(wp) :: vec(3), r2, tol_eff
    real(wp), parameter :: thr = sqrt(epsilon(0.0_wp))
-   real(wp), parameter :: tol = 0.3_wp
+   real(wp), parameter :: default_tol = 0.3_wp
 
    list = 0
    iws = 0
@@ -374,6 +461,11 @@ pure subroutine get_wsc_pairs(iws, trans, rij, list)
    pos = minloc(dist(:img), dim=1, mask=mask(:img))
    mask(pos) = .false.
    r2 = dist(pos)
+   if (present(tol)) then
+      tol_eff = tol * max(1.0_wp, r2)
+   else
+      tol_eff = default_tol
+   end if
    iws = 1
    list(iws) = index(pos)
 
@@ -381,7 +473,7 @@ pure subroutine get_wsc_pairs(iws, trans, rij, list)
       if (iws >= img) exit
       pos = minloc(dist(:img), dim=1, mask=mask(:img))
       if (pos <= 0) exit
-      if (dist(pos) - r2 > tol) exit
+      if (dist(pos) - r2 > tol_eff) exit
       mask(pos) = .false.
       iws = iws + 1
       list(iws) = index(pos)
