@@ -30,12 +30,13 @@ module multicharge_model_eeq
    use mctc_wignerseitz, only: wignerseitz_cell
    use multicharge_blas, only: gemm
    use multicharge_ewald, only: get_alpha, erfc_exp_2d, &
+      & get_ewald_dir_trans_3d, get_ewald_rec_trans_3d, &
       & get_ewald_dir_trans_2d, get_ewald_rec_trans_2d, &
       & get_ewald_dir_trans_1d, get_ewald_rec_trans_1d, &
       & fast_f012_1d, fast_k012_1d
    use multicharge_model_cache, only: cache_container, model_cache
    use multicharge_model_hessian, only: coulomb_kernel, radial_hessian, add_pair_hessian, add_pair_block
-   use multicharge_model_type, only: mchrg_model_type, get_dir_trans, get_rec_trans, &
+   use multicharge_model_type, only: mchrg_model_type, get_dir_trans, &
       & init_wignerseitz_cell, get_periodic_axes
    implicit none
    private
@@ -252,7 +253,8 @@ subroutine add_model_hessian(self, mol, error, cache, adj, hessian)
    allocate(diagonal(3, 3, nat), source=0.0_wp)
    select case (count(mol%periodic))
    case (3)
-      call add_periodic_hessian(self, mol, ptr%wsc, ptr%alpha, cache%qvec, adj, hessian, diagonal)
+      call add_periodic_hessian(self, mol, ptr%wsc, ptr%alpha, cache%qvec, adj, hessian, diagonal, error)
+      if (allocated(error)) return
    case (2)
       call add_periodic_hessian_2d(self, mol, ptr%wsc, ptr%alpha, cache%qvec, adj, hessian, diagonal, error)
       if (allocated(error)) return
@@ -292,20 +294,29 @@ end subroutine add_model_hessian
 
 !> Curvature of the same finite Ewald sums and WS average used for A.
 !> The lattice, Ewald parameter, and self-image distances are fixed here.
-subroutine add_periodic_hessian(self, mol, wsc, alpha, qvec, adj, hessian, diagonal)
+subroutine add_periodic_hessian(self, mol, wsc, alpha, qvec, adj, hessian, diagonal, error)
    class(eeq_model), intent(in) :: self
    type(structure_type), intent(in) :: mol
    type(wignerseitz_cell), intent(in) :: wsc
    real(wp), intent(in) :: alpha, qvec(:), adj(:)
    real(wp), intent(inout) :: hessian(:, :)
    real(wp), intent(inout) :: diagonal(:, :, :)
+   type(error_type), allocatable, intent(out), optional :: error
    integer :: iat, jat, izp, jzp, img, itr, ipair, npair
-   real(wp) :: rij(3), vec(3), box(3, 3), gam, r, weight, wsw
+   real(wp) :: rij(3), vec(3), box(3, 3), gam, gam_min, max_rij, r, weight, wsw
    real(wp) :: val, dr, drr, ar, arr
    real(wp), allocatable :: dtrans(:, :), rtrans(:, :), rec_weight(:)
 
-   call get_dir_trans(mol, dtrans)
-   call get_rec_trans(mol%lattice, rtrans)
+   gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
+   max_rij = get_max_wsc_disp(mol, wsc)
+   call get_ewald_dir_trans_3d(mol%lattice, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
+   if (present(error)) then
+      if (allocated(error)) return
+   end if
+   call get_ewald_rec_trans_3d(mol%lattice, alpha, rtrans, error=error)
+   if (present(error)) then
+      if (allocated(error)) return
+   end if
    call get_rec_weights(abs(matdet_3x3(mol%lattice)), alpha, rtrans, rec_weight)
 
    ! Each pair owns its off-diagonal blocks. Only the diagonal blocks are
@@ -545,7 +556,7 @@ subroutine get_coulomb_matrix(self, mol, cache, amat)
 
    select case (count(mol%periodic))
    case (3)
-      call get_amat_3d(self, mol, ptr%wsc, ptr%alpha, amat)
+      call get_amat_3d(self, mol, ptr%wsc, ptr%alpha, amat, cache%error)
    case (2)
       call get_amat_2d(self, mol, ptr%wsc, ptr%alpha, amat, cache%error)
    case (1)
@@ -597,19 +608,29 @@ subroutine get_amat_0d(self, mol, amat)
    amat(mol%nat + 1, mol%nat + 1) = 0.0_wp
 end subroutine get_amat_0d
 
-subroutine get_amat_3d(self, mol, wsc, alpha, amat)
+subroutine get_amat_3d(self, mol, wsc, alpha, amat, error)
    class(eeq_model), intent(in) :: self
    type(structure_type), intent(in) :: mol
    type(wignerseitz_cell), intent(in) :: wsc
    real(wp), intent(in) :: alpha
    real(wp), intent(out) :: amat(:, :)
+   type(error_type), allocatable, intent(out), optional :: error
 
    integer :: iat, jat, izp, jzp, img, ipair, npair
-   real(wp) :: vec(3), gam, wsw, dtmp, rtmp, tmp
+   real(wp) :: vec(3), gam, gam_min, max_rij, wsw, dtmp, rtmp, tmp
    real(wp), allocatable :: dtrans(:, :), rtrans(:, :), rec_weight(:)
 
-   call get_dir_trans(mol, dtrans)
-   call get_rec_trans(mol%lattice, rtrans)
+   amat = 0.0_wp
+   gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
+   max_rij = get_max_wsc_disp(mol, wsc)
+   call get_ewald_dir_trans_3d(mol%lattice, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
+   if (present(error)) then
+      if (allocated(error)) return
+   end if
+   call get_ewald_rec_trans_3d(mol%lattice, alpha, rtrans, error=error)
+   if (present(error)) then
+      if (allocated(error)) return
+   end if
    call get_rec_weights(abs(matdet_3x3(mol%lattice)), alpha, rtrans, rec_weight)
 
    npair = mol%nat*(mol%nat+1)/2
@@ -623,15 +644,21 @@ subroutine get_amat_3d(self, mol, wsc, alpha, amat)
       izp = mol%id(iat)
       jzp = mol%id(jat)
       gam = 1.0_wp / sqrt(self%rad(izp)**2 + self%rad(jzp)**2)
-      wsw = 1.0_wp / real(wsc%nimg(jat, iat), wp)
-      tmp = 0.0_wp
-      do img = 1, wsc%nimg(jat, iat)
-         vec = mol%xyz(:, jat) - mol%xyz(:, iat) + wsc%trans(:, wsc%tridx(img, jat, iat))
-         call get_amat_dir_3d(vec, gam, alpha, dtrans, dtmp, skip_zero=(iat == jat))
+      if (iat == jat) then
+         vec = 0.0_wp
+         call get_amat_dir_3d(vec, gam, alpha, dtrans, dtmp, skip_zero=.true.)
          call get_amat_rec_3d(vec, rtrans, rec_weight, rtmp)
-         tmp = tmp + (dtmp + rtmp) * wsw
-      end do
-      if (iat == jat) tmp = tmp + self%eta(izp) + sqrt2pi / self%rad(izp) - 2 * alpha / sqrtpi
+         tmp = dtmp + rtmp + self%eta(izp) + sqrt2pi / self%rad(izp) - 2.0_wp * alpha / sqrtpi
+      else
+         wsw = 1.0_wp / real(wsc%nimg(jat, iat), wp)
+         tmp = 0.0_wp
+         do img = 1, wsc%nimg(jat, iat)
+            vec = mol%xyz(:, jat) - mol%xyz(:, iat) + wsc%trans(:, wsc%tridx(img, jat, iat))
+            call get_amat_dir_3d(vec, gam, alpha, dtrans, dtmp, skip_zero=.false.)
+            call get_amat_rec_3d(vec, rtrans, rec_weight, rtmp)
+            tmp = tmp + (dtmp + rtmp) * wsw
+         end do
+      end if
       amat(jat, iat) = tmp
       amat(iat, jat) = tmp
    end do
@@ -882,7 +909,7 @@ subroutine get_coulomb_derivs(self, mol, cache, qvec, dadr, dadL, atrace)
 
    select case (count(mol%periodic))
    case (3)
-      call get_damat_3d(self, mol, ptr%wsc, ptr%alpha, qvec, dadr, dadL, atrace)
+      call get_damat_3d(self, mol, ptr%wsc, ptr%alpha, qvec, dadr, dadL, atrace, cache%error)
    case (2)
       call get_damat_2d(self, mol, ptr%wsc, ptr%alpha, qvec, dadr, dadL, atrace, cache%error)
    case (1)
@@ -945,22 +972,32 @@ subroutine get_damat_0d(self, mol, qvec, dadr, dadL, atrace)
    !$omp end parallel
 end subroutine get_damat_0d
 
-subroutine get_damat_3d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace)
+subroutine get_damat_3d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace, error)
    class(eeq_model), intent(in) :: self
    type(structure_type), intent(in) :: mol
    type(wignerseitz_cell), intent(in) :: wsc
    real(wp), intent(in) :: alpha, qvec(:)
    real(wp), intent(out) :: dadr(:, :, :), dadL(:, :, :), atrace(:, :)
+   type(error_type), allocatable, intent(out), optional :: error
 
    integer :: iat, jat, izp, jzp, img, ipair, npair
-   real(wp) :: gam, wsw, vec(3), dG(3), dS(3, 3)
+   real(wp) :: gam, gam_min, max_rij, wsw, vec(3), dG(3), dS(3, 3)
    real(wp) :: dGd(3), dSd(3, 3), dGr(3), dSr(3, 3)
    real(wp), allocatable :: dtrans(:, :), rtrans(:, :), rec_weight(:), rec_strain(:, :, :)
 
    atrace(:, :) = 0.0_wp
    dadL(:, :, :) = 0.0_wp
-   call get_dir_trans(mol, dtrans)
-   call get_rec_trans(mol%lattice, rtrans)
+   dadr(:, :, :) = 0.0_wp
+   gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
+   max_rij = get_max_wsc_disp(mol, wsc)
+   call get_ewald_dir_trans_3d(mol%lattice, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
+   if (present(error)) then
+      if (allocated(error)) return
+   end if
+   call get_ewald_rec_trans_3d(mol%lattice, alpha, rtrans, error=error)
+   if (present(error)) then
+      if (allocated(error)) return
+   end if
    call get_rec_weights(abs(matdet_3x3(mol%lattice)), alpha, rtrans, rec_weight, rec_strain)
 
    npair = mol%nat*(mol%nat+1)/2
@@ -983,17 +1020,21 @@ subroutine get_damat_3d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace)
       dG(:) = 0.0_wp
       dS(:, :) = 0.0_wp
       gam = 1.0_wp / sqrt(self%rad(izp)**2 + self%rad(jzp)**2)
-      wsw = 1.0_wp / real(wsc%nimg(jat, iat), wp)
-      do img = 1, wsc%nimg(jat, iat)
-         vec = mol%xyz(:, jat) - mol%xyz(:, iat) + wsc%trans(:, wsc%tridx(img, jat, iat))
-         call get_damat_dir_3d(vec, gam, alpha, dtrans, dGd, dSd, skip_zero=(iat == jat))
-         call get_damat_rec_3d(vec, rtrans, rec_weight, rec_strain, dGr, dSr)
-         dG = dG + (dGd + dGr) * wsw
-         dS = dS + (dSd + dSr) * wsw
-      end do
       if (iat == jat) then
+         vec = 0.0_wp
+         call get_damat_dir_3d(vec, gam, alpha, dtrans, dGd, dSd, skip_zero=.true.)
+         call get_damat_rec_3d(vec, rtrans, rec_weight, rec_strain, dGr, dSr)
+         dS = dSd + dSr
          dadL(:, :, iat) = dadL(:, :, iat) + dS * qvec(iat)
       else
+         wsw = 1.0_wp / real(wsc%nimg(jat, iat), wp)
+         do img = 1, wsc%nimg(jat, iat)
+            vec = mol%xyz(:, jat) - mol%xyz(:, iat) + wsc%trans(:, wsc%tridx(img, jat, iat))
+            call get_damat_dir_3d(vec, gam, alpha, dtrans, dGd, dSd, skip_zero=.false.)
+            call get_damat_rec_3d(vec, rtrans, rec_weight, rec_strain, dGr, dSr)
+            dG = dG + (dGd + dGr) * wsw
+            dS = dS + (dSd + dSr) * wsw
+         end do
          atrace(:, iat) = atrace(:, iat) - dG * qvec(jat)
          atrace(:, jat) = atrace(:, jat) + dG * qvec(iat)
          dadr(:, iat, jat) = -dG * qvec(iat)

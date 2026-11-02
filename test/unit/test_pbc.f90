@@ -72,6 +72,7 @@ subroutine collect_pbc(testsuite)
       & new_unittest("pbc-wsc-invariance-1d-2d", test_pbc_wsc_invariance_1d_2d), &
       & new_unittest("eeqbc-convergence-1d-2d", test_eeqbc_convergence_1d_2d), &
       & new_unittest("eeqbc-water-helium-358", test_eeqbc_water_helium_358), &
+      & new_unittest("eeq-3d-slab-285", test_eeq_3d_slab_285), &
       & new_unittest("degenerate-lattice-error", test_degenerate_lattice_error) &
       & ]
 
@@ -844,21 +845,22 @@ subroutine test_eeq_q_cyanamide(error)
 
    type(structure_type) :: mol
    class(mchrg_model_type), allocatable :: model
+   ! Converged 3D Ewald reference charges (differs by <= 2.3e-6 from legacy rep=[2,2,2]).
    real(wp), parameter :: ref(40) = [&
-      & 3.47274007973765E-1_wp, 3.47273017259661E-1_wp, 3.47276806231462E-1_wp, &
-      & 3.47267235121650E-1_wp, 3.47288751410308E-1_wp, 3.47296840650318E-1_wp, &
-      & 3.47299868243747E-1_wp, 3.47299359754750E-1_wp, 3.45885710186856E-1_wp, &
-      & 3.45874246032015E-1_wp, 3.45888242047875E-1_wp, 3.45877451600398E-1_wp, &
-      & 3.45902365123333E-1_wp, 3.45902162041418E-1_wp, 3.45900336974539E-1_wp, &
-      & 3.45903770121699E-1_wp, 3.58996736955583E-1_wp, 3.58987991603151E-1_wp, &
-      & 3.59000859720791E-1_wp, 3.58990960169615E-1_wp, 3.58990422147650E-1_wp, &
-      & 3.58997842028106E-1_wp, 3.58997124263551E-1_wp, 3.59001728635141E-1_wp, &
-      &-5.86637659146611E-1_wp, -5.86601835343945E-1_wp, -5.86625078062709E-1_wp, &
-      &-5.86579999312624E-1_wp, -5.86654394920376E-1_wp, -5.86669360667441E-1_wp, &
-      &-5.86667481028248E-1_wp, -5.86674873278027E-1_wp, -4.65529092171338E-1_wp, &
-      &-4.65527713392387E-1_wp, -4.65546450764424E-1_wp, -4.65540905286785E-1_wp, &
-      &-4.65529860758785E-1_wp, -4.65533757413217E-1_wp, -4.65527683275370E-1_wp, &
-      &-4.65527691475100E-1_wp]
+      & 3.47273696479021E-1_wp, 3.47272705640270E-1_wp, 3.47276492903749E-1_wp, &
+      & 3.47266922178364E-1_wp, 3.47288439460215E-1_wp, 3.47296528581096E-1_wp, &
+      & 3.47299555433948E-1_wp, 3.47299047247046E-1_wp, 3.45885448217334E-1_wp, &
+      & 3.45873984082476E-1_wp, 3.45887979518336E-1_wp, 3.45877189683493E-1_wp, &
+      & 3.45902103370702E-1_wp, 3.45901899732038E-1_wp, 3.45900074770712E-1_wp, &
+      & 3.45903507923248E-1_wp, 3.58994427905596E-1_wp, 3.58985684782718E-1_wp, &
+      & 3.58998551488410E-1_wp, 3.58988652945645E-1_wp, 3.58988114752443E-1_wp, &
+      & 3.58995533629608E-1_wp, 3.58994816857993E-1_wp, 3.58999419102342E-1_wp, &
+      &-5.86636852376099E-1_wp, -5.86601030236713E-1_wp, -5.86624269538219E-1_wp, &
+      &-5.86579192001313E-1_wp, -5.86653588719833E-1_wp, -5.86668553721606E-1_wp, &
+      &-5.86666673919381E-1_wp, -5.86674064898699E-1_wp, -4.65527015747556E-1_wp, &
+      &-4.65525637708548E-1_wp, -4.65544375954499E-1_wp, -4.65538830945934E-1_wp, &
+      &-4.65527785578432E-1_wp, -4.65531681382053E-1_wp, -4.65525608429865E-1_wp, &
+      &-4.65525615528052E-1_wp]
 
    call get_structure(mol, "X23", "cyanamide")
    call new_eeq2019_model(mol, model, error)
@@ -874,16 +876,16 @@ subroutine test_eeq_e_formamide(error)
 
    type(structure_type) :: mol
    class(mchrg_model_type), allocatable :: model
-   ! Updated for the mctc-lib Wigner-Seitz image tolerance in the finite Ewald sum.
+   ! Converged 3D Ewald reference energies (differs by <= 1.35e-4 from legacy rep=[2,2,2]).
    real(wp), parameter :: ref(24) = [&
-      & 4.01878374787191E-1_wp, 4.01885037899597E-1_wp, 4.01836688390911E-1_wp, &
-      & 4.01859670984182E-1_wp, 4.30132953804280E-1_wp, 4.30105983229582E-1_wp, &
-      & 4.30085942904623E-1_wp, 4.30109219580760E-1_wp, 1.90400205083764E-1_wp, &
-      & 1.90401834703106E-1_wp, 1.90404142905890E-1_wp, 1.90407459232625E-1_wp, &
-      & 3.33868772086876E-1_wp, 3.33849119518316E-1_wp, 3.33876414218980E-1_wp, &
-      & 3.33893467423880E-1_wp, -8.35636285533486E-1_wp, -8.35615627485463E-1_wp, &
-      &-8.35543385304371E-1_wp, -8.35590189215555E-1_wp, -6.31079470991667E-1_wp, &
-      &-6.31060026823144E-1_wp, -6.31085555821538E-1_wp, -6.31082095933280E-1_wp]
+      & 4.01820317641649E-1_wp, 4.01826970293715E-1_wp, 4.01778618929473E-1_wp, &
+      & 4.01801620737465E-1_wp, 4.30133215169715E-1_wp, 4.30106241841601E-1_wp, &
+      & 4.30086201257563E-1_wp, 4.30109482177696E-1_wp, 1.90391275024120E-1_wp, &
+      & 1.90392904370207E-1_wp, 1.90395221896778E-1_wp, 1.90398527506007E-1_wp, &
+      & 3.33798778194695E-1_wp, 3.33779134873330E-1_wp, 3.33806406791091E-1_wp, &
+      & 3.33823483957305E-1_wp, -8.35501801552073E-1_wp, -8.35481140201098E-1_wp, &
+      &-8.35408885793255E-1_wp, -8.35455735270739E-1_wp, -6.31069087329026E-1_wp, &
+      &-6.31049654240391E-1_wp, -6.31075181828644E-1_wp, -6.31071707101098E-1_wp]
 
    call get_structure(mol, "X23", "formamide")
    call new_eeq2019_model(mol, model, error)
@@ -2160,5 +2162,116 @@ subroutine test_eeqbc_water_helium_358(error)
    end do
 
 end subroutine test_eeqbc_water_helium_358
+
+!> Regression test for DFT-D4 issue #285: 3D periodic slab with large vacuum gap
+!> and in-plane lattice scan across exact hexagonal symmetry.
+subroutine test_eeq_3d_slab_285(error)
+   type(error_type), allocatable, intent(out) :: error
+   type(structure_type) :: mol2d, mol3d
+   class(mchrg_model_type), allocatable :: model
+   type(cache_container) :: cache
+   real(wp), parameter :: aa2au = 1.8897261246257702_wp
+   real(wp), parameter :: pi = 3.14159265358979323846264338327950288_wp
+   real(wp) :: xyz(3, 3), lat(3, 3), cn(3)
+   real(wp), allocatable :: qloc(:)
+   real(wp) :: q2d(3), q_z25(3), q_z50(3), q_z100(3)
+   real(wp) :: amat0(4, 4), amat_s(4, 4), alpha0, scales(2), vol, g0_shift
+   real(wp) :: q_scan(3, 26), e_scan(3, 26), etot(26), x_ang, d2q, d2e
+   integer :: ix, is
+
+   xyz = reshape([ &
+      & -0.3910542064024872_wp,  0.3976645623910747_wp, 2.977929077294636_wp, &
+      & -0.3542054272959850_wp,  1.0567259314317760_wp, 2.610987477729398_wp, &
+      & -0.9445722089116435_wp, -0.0304014548863456_wp, 3.370602014356701_wp], [3, 3]) * aa2au
+
+   lat = 0.0_wp
+   lat(:, 1) = [2.794646093662685_wp, 0.0_wp, 0.0_wp] * aa2au
+   lat(:, 2) = [-1.397323046831344_wp, 2.420234511698831_wp, 0.0_wp] * aa2au
+   lat(:, 3) = [0.0_wp, 0.0_wp, 25.0_wp] * aa2au
+
+   call new(mol2d, [8, 1, 1], xyz, lattice=lat, periodic=[.true., .true., .false.])
+   call new_eeq2019_model(mol2d, model, error)
+   if (allocated(error)) return
+   call get_charges(model, mol2d, error, q2d)
+   if (allocated(error)) return
+
+   ! 1. Verify large-vacuum 3D supercell convergence toward true 2D EEQ
+   call new(mol3d, [8, 1, 1], xyz, lattice=lat, periodic=[.true., .true., .true.])
+   call get_charges(model, mol3d, error, q_z25, cache=cache)
+   if (allocated(error)) return
+
+   ! Check 3D alpha-invariance on the slab cell (accounting for the omitted G=0
+   ! constant -pi / (alpha^2 * V) in raw 3D A_ij, which shifts into lambda)
+   call model%get_coulomb_matrix(mol3d, cache, amat0)
+   select type (raw => cache%raw)
+   type is (eeq_cache)
+      vol = lat(1, 1) * lat(2, 2) * lat(3, 3)
+      alpha0 = raw%alpha
+      scales = [0.75_wp, 1.3_wp]
+      do is = 1, size(scales)
+         raw%alpha = alpha0 * scales(is)
+         call model%get_coulomb_matrix(mol3d, cache, amat_s)
+         g0_shift = (pi / vol) * (1.0_wp / raw%alpha**2 - 1.0_wp / alpha0**2)
+         if (maxval(abs((amat_s(1:3, 1:3) - amat0(1:3, 1:3)) - g0_shift)) > 1.0e-12_wp) then
+            call test_failed(error, "3D Ewald matrix is not invariant to alpha on slab cell")
+            return
+         end if
+      end do
+      raw%alpha = alpha0
+   end select
+
+   ! Check 3D analytical derivatives on the hexagonal slab cell
+   call test_numgrad(error, mol3d, model)
+   if (allocated(error)) return
+   call test_numsigma(error, mol3d, model)
+   if (allocated(error)) return
+   call test_numdqdr(error, mol3d, model)
+   if (allocated(error)) return
+   call test_numdqdL(error, mol3d, model)
+   if (allocated(error)) return
+
+   lat(:, 3) = [0.0_wp, 0.0_wp, 50.0_wp] * aa2au
+   call new(mol3d, [8, 1, 1], xyz, lattice=lat, periodic=[.true., .true., .true.])
+   call get_charges(model, mol3d, error, q_z50)
+   if (allocated(error)) return
+
+   lat(:, 3) = [0.0_wp, 0.0_wp, 100.0_wp] * aa2au
+   call new(mol3d, [8, 1, 1], xyz, lattice=lat, periodic=[.true., .true., .true.])
+   call get_charges(model, mol3d, error, q_z100)
+   if (allocated(error)) return
+
+   if (maxval(abs(q_z25 - q2d)) > 6.0e-5_wp &
+      & .or. maxval(abs(q_z50 - q2d)) > 3.0e-5_wp &
+      & .or. maxval(abs(q_z100 - q2d)) > 1.5e-5_wp) then
+      call test_failed(error, "3D slab charges failed to converge toward 2D EEQ limit")
+      return
+   end if
+
+   ! Yeh-Berkowitz 1/Lz dipole-sheet scaling: Lz * (q_3D(Lz) - q_2D) is constant
+   if (maxval(abs(50.0_wp * (q_z50 - q2d) - 100.0_wp * (q_z100 - q2d))) > 1.0e-5_wp) then
+      call test_failed(error, "3D-to-2D slab difference does not follow 1/Lz asymptotic scaling")
+      return
+   end if
+
+   ! 2. Verify smoothness across hexagonal symmetry (X = 2.7934..2.7959 A at Z = 100 A)
+   do ix = 1, 26
+      x_ang = 2.0_wp + real(7933 + ix, wp) / 10000.0_wp
+      lat(:, 1) = [x_ang, 0.0_wp, 0.0_wp] * aa2au
+      call new(mol3d, [8, 1, 1], xyz, lattice=lat, periodic=[.true., .true., .true.])
+      call model%ncoord%get_cn(mol3d, cn)
+      e_scan(:, ix) = 0.0_wp
+      call model%solve(mol3d, error, cn, qloc, energy=e_scan(:, ix), qvec=q_scan(:, ix))
+      if (allocated(error)) return
+      etot(ix) = sum(e_scan(:, ix))
+   end do
+
+   d2q = maxval(abs(q_scan(:, 3:26) - 2.0_wp * q_scan(:, 2:25) + q_scan(:, 1:24)))
+   d2e = maxval(abs(etot(3:26) - 2.0_wp * etot(2:25) + etot(1:24)))
+   if (d2q > 1.0e-8_wp .or. d2e > 1.0e-8_wp) then
+      call test_failed(error, "Discontinuity detected across hexagonal symmetry in 3D slab X-scan")
+      return
+   end if
+
+end subroutine test_eeq_3d_slab_285
 
 end module test_pbc
