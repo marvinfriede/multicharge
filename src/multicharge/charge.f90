@@ -67,6 +67,9 @@ subroutine get_charges(mchrg_model, mol, error, qvec, dqdr, dqdL, cache)
 
    grad = (present(dqdr) .and. present(dqdL)) .or. present(cache)
 
+   call mchrg_model%check_structure(mol, error)
+   if (allocated(error)) return
+
    allocate(cn(mol%nat), qloc(mol%nat))
    if (grad) then
       allocate(dcndr(3, mol%nat, mol%nat), dcndL(3, 3, mol%nat))
@@ -79,7 +82,7 @@ subroutine get_charges(mchrg_model, mol, error, qvec, dqdr, dqdL, cache)
    call mchrg_model%ncoord%get_coordination_number(mol_wrapped, trans, cn, dcndr, dcndL)
    call mchrg_model%local_charge(mol_wrapped, trans, qloc, dqlocdr, dqlocdL)
 
-   call mchrg_model%solve(mol, error, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL, &
+   call mchrg_model%solve(mol_wrapped, error, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL, &
       & qvec=qvec, dqdr=dqdr, dqdL=dqdL, response=cache)
 
 end subroutine get_charges
@@ -95,7 +98,13 @@ subroutine add_charge_hessian(mchrg_model, mol, error, weights, hessian, cache)
    real(wp), intent(inout) :: hessian(:, :)
    type(cache_container), intent(inout) :: cache
 
-   call mchrg_model%add_charge_hessian(mol, error, weights, hessian, cache)
+   type(structure_type) :: mol_wrapped
+
+   call mchrg_model%check_structure(mol, error)
+   if (allocated(error)) return
+   mol_wrapped = mol
+   call wrap_to_central_cell(mol_wrapped%xyz, mol_wrapped%lattice, mol_wrapped%periodic)
+   call mchrg_model%add_charge_hessian(mol_wrapped, error, weights, hessian, cache)
 end subroutine add_charge_hessian
 
 

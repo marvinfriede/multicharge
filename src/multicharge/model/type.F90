@@ -68,6 +68,8 @@ module multicharge_model_type
       procedure :: add_model_hessian
       !> Calculate local charges from electronegativity weighted CN
       procedure :: local_charge
+      !> Validate periodic subspace geometry and model charge constraints
+      procedure :: check_structure
       !> Whether the charge model supports charged 1D/2D periodic unit cells
       procedure :: supports_charged_lowd
       !> Update cache
@@ -157,6 +159,19 @@ subroutine check_structure(self, mol, error)
    integer :: ndim, p_axes(3)
    real(wp) :: a1(3), a2(3), a3(3), len1, len2, area, vol
    real(wp), parameter :: tol_deg = 1.0e-10_wp
+
+   if (mol%nat <= 0 .or. .not. allocated(mol%xyz)) then
+      call fatal_error(error, "Molecular structure contains no atoms")
+      return
+   end if
+   if (.not. all(ieee_is_finite(mol%xyz(:, :mol%nat)))) then
+      call fatal_error(error, "Atomic coordinates contain non-finite values")
+      return
+   end if
+   if (.not. ieee_is_finite(mol%charge)) then
+      call fatal_error(error, "Molecular charge contains a non-finite value")
+      return
+   end if
 
    if (.not. allocated(mol%periodic)) return
    call get_periodic_axes(mol%periodic, ndim, p_axes)

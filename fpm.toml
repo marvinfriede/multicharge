@@ -9,7 +9,8 @@ copyright = "Copyright 2021-2026 Sebastian Ehlert"
 link = ["lapack", "blas"]
 
 [dependencies]
-mctc-lib = { path = "../mctc-lib" }
+mctc-lib.git = "https://github.com/grimme-lab/mctc-lib.git"
+mctc-lib.rev = "841ca7546a378156ba31e25179e9adb1afa792ce"
 
 [dev-dependencies]
 mstore.git = "https://github.com/grimme-lab/mstore.git"

@@ -19,7 +19,8 @@ module test_wignerseitz
    use mctc_env_testing, only: new_unittest, unittest_type, error_type, check, &
       & test_failed
    use mctc_io_structure, only: structure_type, new
-   use mctc_wignerseitz, only: wignerseitz_cell, new_wignerseitz_cell
+   use mctc_wignerseitz, only: wignerseitz_cell, new_wignerseitz_cell, &
+      & get_wignerseitz_weights
    use mstore, only: get_structure
    implicit none
    private
@@ -47,7 +48,8 @@ subroutine collect_wignerseitz(testsuite)
       & new_unittest("wignerseitz-cell-2d", test_wsc_2d), &
       & new_unittest("wignerseitz-cell-3d", test_wsc_3d), &
       & new_unittest("wignerseitz-self-images", test_self_images), &
-      & new_unittest("wignerseitz-robustness-1d-2d", test_wsc_robustness_1d_2d) &
+      & new_unittest("wignerseitz-robustness-1d-2d", test_wsc_robustness_1d_2d), &
+      & new_unittest("wignerseitz-65deg-counterexample", test_wsc_65deg_counterexample) &
       & ]
 
 end subroutine collect_wignerseitz
@@ -481,5 +483,50 @@ subroutine test_wsc_robustness_1d_2d(error)
    end if
 
 end subroutine test_wsc_robustness_1d_2d
+
+subroutine test_wsc_65deg_counterexample(error)
+   type(error_type), allocatable, intent(out) :: error
+
+   real(wp), parameter :: pi = 4.0_wp * atan(1.0_wp)
+   real(wp), parameter :: angle = 65.0_wp * pi / 180.0_wp
+   type(structure_type) :: mol
+   type(wignerseitz_cell) :: wsc
+   real(wp) :: lattice(3, 3), xyz(3, 2), rij(3), vec1(3), vec2(3)
+   real(wp) :: d2_found1, d2_found2, d2_expect, weights(16)
+
+   lattice = 0.0_wp
+   lattice(:, 1) = [5.0_wp, 0.0_wp, 0.0_wp]
+   lattice(:, 2) = [5.0_wp * cos(angle), 5.0_wp * sin(angle), 0.0_wp]
+
+   xyz(:, 1) = 0.0_wp
+   xyz(:, 2) = 1.39_wp * (lattice(:, 1) + lattice(:, 2))
+
+   call new(mol, [6, 8], xyz, lattice=lattice, periodic=[.true., .true., .false.])
+   call new_wignerseitz_cell(wsc, mol)
+
+   call check(error, wsc%nimg(1, 2), 2)
+   if (allocated(error)) return
+   call check(error, wsc%nimg(2, 1), 2)
+   if (allocated(error)) return
+
+   rij = mol%xyz(:, 2) - mol%xyz(:, 1)
+   d2_expect = sum((rij - 2.0_wp * lattice(:, 1) - lattice(:, 2))**2)
+   vec1 = rij - wsc%trans(:, wsc%tridx(1, 1, 2))
+   vec2 = rij - wsc%trans(:, wsc%tridx(2, 1, 2))
+   d2_found1 = sum(vec1**2)
+   d2_found2 = sum(vec2**2)
+
+   if (abs(d2_found1 - d2_expect) > 1.0e-12_wp .or. abs(d2_found2 - d2_expect) > 1.0e-12_wp) then
+      call test_failed(error, "65-degree 2D counterexample failed to find (2,1) and (1,2) images")
+      return
+   end if
+
+   call get_wignerseitz_weights(wsc, 1, 2, rij, weights)
+   if (maxval(abs(weights(1:2) - 0.5_wp)) > 1.0e-12_wp) then
+      call test_failed(error, "65-degree 2D counterexample weights are not [0.5, 0.5]")
+      return
+   end if
+
+end subroutine test_wsc_65deg_counterexample
 
 end module test_wignerseitz
