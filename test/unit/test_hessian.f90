@@ -2,6 +2,7 @@
 ! SPDX-Identifier: Apache-2.0
 
 module test_hessian
+   use mctc_cutoff, only: get_lattice_points
    use mctc_env, only: wp
    use mctc_env_testing, only: new_unittest, unittest_type, error_type, test_failed
    use mctc_io, only: structure_type, new
@@ -10,7 +11,6 @@ module test_hessian
    use multicharge_model, only: mchrg_model_type
    use multicharge_model_eeq, only: eeq_cache
    use multicharge_model_hessian, only: coulomb_kernel, radial_hessian
-   use multicharge_model_type, only: get_dir_trans
    use multicharge_param, only: new_eeq2019_model, new_eeqbc2025_model
    implicit none
    private
@@ -424,7 +424,7 @@ subroutine test_small_r_kernel(error)
       if (allocated(model)) deallocate(model)
       call new_eeq2019_model(mol, model, error)
       if (allocated(error)) return
-      call get_dir_trans(mol, trans, 25.0_wp)
+      call get_lattice_points(mol%periodic, mol%lattice, 25.0_wp, trans)
       call model%ncoord%get_coordination_number(mol, trans, cn)
       call model%local_charge(mol, trans, qloc)
       call model%update(mol, cache, cn, qloc)

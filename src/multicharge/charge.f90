@@ -19,9 +19,10 @@
 
 !> Interface to the charge models
 module multicharge_charge
+   use mctc_cutoff, only : get_lattice_points, wrap_to_central_cell
    use mctc_env, only : error_type, wp
    use mctc_io, only : structure_type
-   use multicharge_model, only : mchrg_model_type, get_dir_trans, check_structure
+   use multicharge_model, only : mchrg_model_type
    use multicharge_model_cache, only : cache_container
    use multicharge_param, only : new_eeq2019_model, new_eeqbc2025_model
    implicit none
@@ -59,12 +60,10 @@ subroutine get_charges(mchrg_model, mol, error, qvec, dqdr, dqdL, cache)
    type(cache_container), intent(inout), optional :: cache
 
    logical :: grad
+   type(structure_type) :: mol_wrapped
    real(wp), allocatable :: cn(:), dcndr(:, :, :), dcndL(:, :, :)
    real(wp), allocatable :: qloc(:), dqlocdr(:, :, :), dqlocdL(:, :, :)
    real(wp), allocatable :: trans(:, :)
-
-   call check_structure(mol, error)
-   if (allocated(error)) return
 
    grad = (present(dqdr) .and. present(dqdL)) .or. present(cache)
 
@@ -74,9 +73,11 @@ subroutine get_charges(mchrg_model, mol, error, qvec, dqdr, dqdL, cache)
       allocate (dqlocdr(3, mol%nat, mol%nat), dqlocdL(3, 3, mol%nat))
    end if
 
-   call get_dir_trans(mol, trans, mchrg_model%ncoord%cutoff)
-   call mchrg_model%ncoord%get_coordination_number(mol, trans, cn, dcndr, dcndL)
-   call mchrg_model%local_charge(mol, trans, qloc, dqlocdr, dqlocdL)
+   mol_wrapped = mol
+   call wrap_to_central_cell(mol_wrapped%xyz, mol_wrapped%lattice, mol_wrapped%periodic)
+   call get_lattice_points(mol_wrapped%periodic, mol_wrapped%lattice, mchrg_model%ncoord%cutoff, trans)
+   call mchrg_model%ncoord%get_coordination_number(mol_wrapped, trans, cn, dcndr, dcndL)
+   call mchrg_model%local_charge(mol_wrapped, trans, qloc, dqlocdr, dqlocdL)
 
    call mchrg_model%solve(mol, error, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL, &
       & qvec=qvec, dqdr=dqdr, dqdL=dqdL, response=cache)

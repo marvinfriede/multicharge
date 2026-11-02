@@ -14,13 +14,15 @@
 ! limitations under the License.
 
 module multicharge_ewald
+   use mctc_cutoff, only: get_lattice_points
    use mctc_env, only: error_type, fatal_error, i8, wp
    use mctc_io_constants, only: pi
-   use mctc_io_math, only: matdet_3x3, matinv_3x3
+   use mctc_io_math, only: crossprod, matdet_3x3, matinv_3x3
    implicit none
    private
 
    public :: get_alpha, get_alpha_2d, erfc_exp_2d, reduce_basis_2d
+   public :: get_periodic_axes
    public :: get_ewald_dir_trans_3d, get_ewald_rec_trans_3d
    public :: get_ewald_dir_trans_2d, get_ewald_rec_trans_2d
    public :: get_ewald_dir_trans_1d, get_ewald_rec_trans_1d
@@ -78,20 +80,6 @@ module multicharge_ewald
    end interface
 
 contains
-
-!> Compute 3D cross product of two vectors
-pure function cross_product_3d(a, b) result(c)
-   !> First vector
-   real(wp), intent(in) :: a(3)
-   !> Second vector
-   real(wp), intent(in) :: b(3)
-   !> Cross product a x b
-   real(wp) :: c(3)
-
-   c(1) = a(2) * b(3) - a(3) * b(2)
-   c(2) = a(3) * b(1) - a(1) * b(3)
-   c(3) = a(1) * b(2) - a(2) * b(1)
-end function cross_product_3d
 
 !> Extract the number and indices of active periodic axes
 pure subroutine get_periodic_axes(periodic, ndim, p_axes)
@@ -174,10 +162,10 @@ subroutine get_ewald_dir_trans_3d(lattice, alpha, gam_min, trans, max_rij, &
    !> Optional error handling when resource limit is exceeded
    type(error_type), allocatable, intent(out), optional :: error
 
-   real(wp) :: inv_lat(3, 3), t_vec(3), len_max
-   real(wp) :: kappa, kappa_max, tol_val, u_cut, rcut, r_disp, r_dir, r_dir2
-   integer(i8) :: rep_i8(3), grid_i8, ntr_i8, limit_i8
-   integer :: rep(3), i1, i2, i3, ntr, idx, limit, k
+   real(wp) :: inv_lat(3, 3), len_max
+   real(wp) :: kappa, kappa_max, tol_val, u_cut, rcut, r_disp, r_dir
+   integer(i8) :: rep_i8(3), ntr_i8, limit_i8
+   integer :: rep(3), limit, k
 
    tol_val = epsilon(1.0_wp)
    if (present(tol)) tol_val = max(tol, tiny(1.0_wp))
@@ -200,11 +188,10 @@ subroutine get_ewald_dir_trans_3d(lattice, alpha, gam_min, trans, max_rij, &
    r_disp = 0.5_wp * len_max
    if (present(max_rij)) r_disp = max_rij
    r_dir = rcut + r_disp
-   r_dir2 = r_dir * r_dir
 
-   grid_i8 = 1_i8
+   ntr_i8 = 1_i8
    do k = 1, 3
-      rep_i8(k) = ceiling(r_dir * norm2(inv_lat(:, k)), kind=i8)
+      rep_i8(k) = max(2_i8, ceiling(r_dir * norm2(inv_lat(:, k)), kind=i8))
       if (rep_i8(k) > limit_i8) then
          if (present(error)) then
             call fatal_error(error, &
@@ -213,8 +200,8 @@ subroutine get_ewald_dir_trans_3d(lattice, alpha, gam_min, trans, max_rij, &
          allocate(trans(3, 0))
          return
       end if
-      grid_i8 = grid_i8 * (2_i8 * rep_i8(k) + 1_i8)
-      if (grid_i8 > 50_i8 * limit_i8) then
+      ntr_i8 = ntr_i8 * (2_i8 * rep_i8(k) + 1_i8)
+      if (ntr_i8 > limit_i8) then
          if (present(error)) then
             call fatal_error(error, &
                & "3D Ewald direct-space summation exceeds maximum translation limit")
@@ -225,45 +212,7 @@ subroutine get_ewald_dir_trans_3d(lattice, alpha, gam_min, trans, max_rij, &
    end do
 
    rep = int(rep_i8)
-   ntr_i8 = 0_i8
-   do i1 = -rep(1), rep(1)
-      do i2 = -rep(2), rep(2)
-         do i3 = -rep(3), rep(3)
-            t_vec = real(i1, wp) * lattice(:, 1) &
-               & + real(i2, wp) * lattice(:, 2) &
-               & + real(i3, wp) * lattice(:, 3)
-            if (dot_product(t_vec, t_vec) <= r_dir2) then
-               ntr_i8 = ntr_i8 + 1_i8
-            end if
-         end do
-      end do
-   end do
-
-   if (ntr_i8 > limit_i8) then
-      if (present(error)) then
-         call fatal_error(error, &
-            & "3D Ewald direct-space summation exceeds maximum translation limit")
-      end if
-      allocate(trans(3, 0))
-      return
-   end if
-
-   ntr = int(ntr_i8)
-   allocate(trans(3, ntr))
-   idx = 0
-   do i1 = -rep(1), rep(1)
-      do i2 = -rep(2), rep(2)
-         do i3 = -rep(3), rep(3)
-            t_vec = real(i1, wp) * lattice(:, 1) &
-               & + real(i2, wp) * lattice(:, 2) &
-               & + real(i3, wp) * lattice(:, 3)
-            if (dot_product(t_vec, t_vec) <= r_dir2) then
-               idx = idx + 1
-               trans(:, idx) = t_vec
-            end if
-         end do
-      end do
-   end do
+   call get_lattice_points(lattice, rep, .true., trans)
 
 end subroutine get_ewald_dir_trans_3d
 
@@ -283,10 +232,10 @@ subroutine get_ewald_rec_trans_3d(lattice, alpha, trans, tol, max_trans, error)
    !> Optional error handling when resource limit is exceeded
    type(error_type), allocatable, intent(out), optional :: error
 
-   real(wp) :: rec_lat(3, 3), g_vec(3), vol, rlen_min
-   real(wp) :: tol_val, u_cut, gcut, gcut2
-   integer(i8) :: rep_i8(3), grid_i8, ntr_i8, limit_i8
-   integer :: rep(3), i1, i2, i3, ntr, idx, limit, k
+   real(wp) :: rec_lat(3, 3), vol, rlen_min
+   real(wp) :: tol_val, u_cut, gcut
+   integer(i8) :: rep_i8(3), ntr_i8, limit_i8
+   integer :: rep(3), limit, k
 
    tol_val = epsilon(1.0_wp)
    if (present(tol)) tol_val = max(tol, tiny(1.0_wp))
@@ -304,11 +253,10 @@ subroutine get_ewald_rec_trans_3d(lattice, alpha, trans, tol, max_trans, error)
    do while (get_rec_term_3d(gcut, alpha, vol) > tol_val)
       gcut = 1.1_wp * gcut
    end do
-   gcut2 = gcut * gcut
 
-   grid_i8 = 1_i8
+   ntr_i8 = 1_i8
    do k = 1, 3
-      rep_i8(k) = ceiling(gcut * norm2(lattice(:, k)) / twopi, kind=i8)
+      rep_i8(k) = max(2_i8, ceiling(gcut * norm2(lattice(:, k)) / twopi, kind=i8))
       if (rep_i8(k) > limit_i8) then
          if (present(error)) then
             call fatal_error(error, &
@@ -317,8 +265,8 @@ subroutine get_ewald_rec_trans_3d(lattice, alpha, trans, tol, max_trans, error)
          allocate(trans(3, 0))
          return
       end if
-      grid_i8 = grid_i8 * (2_i8 * rep_i8(k) + 1_i8)
-      if (grid_i8 > 50_i8 * limit_i8) then
+      ntr_i8 = ntr_i8 * (2_i8 * rep_i8(k) + 1_i8)
+      if (ntr_i8 - 1_i8 > limit_i8) then
          if (present(error)) then
             call fatal_error(error, &
                & "3D Ewald reciprocal-space summation exceeds maximum translation limit")
@@ -329,47 +277,7 @@ subroutine get_ewald_rec_trans_3d(lattice, alpha, trans, tol, max_trans, error)
    end do
 
    rep = int(rep_i8)
-   ntr_i8 = 0_i8
-   do i1 = -rep(1), rep(1)
-      do i2 = -rep(2), rep(2)
-         do i3 = -rep(3), rep(3)
-            if (i1 == 0 .and. i2 == 0 .and. i3 == 0) cycle
-            g_vec = real(i1, wp) * rec_lat(:, 1) &
-               & + real(i2, wp) * rec_lat(:, 2) &
-               & + real(i3, wp) * rec_lat(:, 3)
-            if (dot_product(g_vec, g_vec) <= gcut2) then
-               ntr_i8 = ntr_i8 + 1_i8
-            end if
-         end do
-      end do
-   end do
-
-   if (ntr_i8 > limit_i8) then
-      if (present(error)) then
-         call fatal_error(error, &
-            & "3D Ewald reciprocal-space summation exceeds maximum translation limit")
-      end if
-      allocate(trans(3, 0))
-      return
-   end if
-
-   ntr = int(ntr_i8)
-   allocate(trans(3, ntr))
-   idx = 0
-   do i1 = -rep(1), rep(1)
-      do i2 = -rep(2), rep(2)
-         do i3 = -rep(3), rep(3)
-            if (i1 == 0 .and. i2 == 0 .and. i3 == 0) cycle
-            g_vec = real(i1, wp) * rec_lat(:, 1) &
-               & + real(i2, wp) * rec_lat(:, 2) &
-               & + real(i3, wp) * rec_lat(:, 3)
-            if (dot_product(g_vec, g_vec) <= gcut2) then
-               idx = idx + 1
-               trans(:, idx) = g_vec
-            end if
-         end do
-      end do
-   end do
+   call get_lattice_points(rec_lat, rep, .false., trans)
 
 end subroutine get_ewald_rec_trans_3d
 
@@ -465,7 +373,7 @@ subroutine get_alpha_2d(a1, a2, alpha)
    real(wp) :: u1(3), u2(3), area, m11, m12, m22, p_lat(3, 2), rec_lat(3, 2)
 
    call reduce_basis_2d(a1, a2, u1, u2)
-   area = norm2(cross_product_3d(u1, u2))
+   area = norm2(crossprod(u1, u2))
    m11 = dot_product(u1, u1)
    m12 = dot_product(u1, u2)
    m22 = dot_product(u2, u2)
@@ -526,11 +434,11 @@ subroutine get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, trans, max_rij, &
    !> Optional error handling when resource limit is exceeded
    type(error_type), allocatable, intent(out), optional :: error
 
-   real(wp) :: u1(3), u2(3), t_vec(3)
-   real(wp) :: kappa, kappa_max, tol_val, u_cut, rcut, r_disp, r_dir, r_dir2
-   real(wp) :: area, m11, m12, m22, len1, len2, d_perp2, c2, delta2
+   real(wp) :: u1(3), u2(3), lat2d(3, 3)
+   real(wp) :: kappa, kappa_max, tol_val, u_cut, rcut, r_disp, r_dir
+   real(wp) :: area, len1, len2
    integer(i8) :: rep1_i8, rep2_i8, ntr_i8, limit_i8
-   integer :: rep1, i1, i2, i2_min, i2_max, ntr, idx, limit
+   integer :: rep1, rep2, limit
 
    tol_val = epsilon(1.0_wp)
    if (present(tol)) tol_val = max(tol, tiny(1.0_wp))
@@ -539,12 +447,9 @@ subroutine get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, trans, max_rij, &
    limit_i8 = int(limit, i8)
 
    call reduce_basis_2d(a1, a2, u1, u2)
-   area = norm2(cross_product_3d(u1, u2))
-   m11 = dot_product(u1, u1)
-   m12 = dot_product(u1, u2)
-   m22 = dot_product(u2, u2)
-   len1 = sqrt(m11)
-   len2 = sqrt(m22)
+   area = norm2(crossprod(u1, u2))
+   len1 = norm2(u1)
+   len2 = norm2(u2)
 
    kappa = min(alpha, gam_min)
    kappa_max = max(alpha, gam_min)
@@ -558,7 +463,6 @@ subroutine get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, trans, max_rij, &
    r_disp = 0.5_wp * (len1 + len2)
    if (present(max_rij)) r_disp = max(r_disp, max_rij)
    r_dir = max(rcut + r_disp, 2.0_wp * max(len1, len2))
-   r_dir2 = r_dir * r_dir
 
    rep1_i8 = max(2_i8, ceiling(r_dir * len2 / area, kind=i8))
    rep2_i8 = max(2_i8, ceiling(r_dir * len1 / area, kind=i8))
@@ -571,23 +475,7 @@ subroutine get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, trans, max_rij, &
       return
    end if
 
-   rep1 = int(rep1_i8)
-   ntr_i8 = 0_i8
-   do i1 = -rep1, rep1
-      d_perp2 = (area * area / m22) * real(i1, wp)**2
-      if (d_perp2 > r_dir2) cycle
-      c2 = -(m12 / m22) * real(i1, wp)
-      delta2 = sqrt(max(0.0_wp, r_dir2 - d_perp2) / m22)
-      i2_min = floor(c2 - delta2)
-      i2_max = ceiling(c2 + delta2)
-      do i2 = i2_min, i2_max
-         t_vec = real(i1, wp) * u1 + real(i2, wp) * u2
-         if (dot_product(t_vec, t_vec) <= r_dir2) then
-            ntr_i8 = ntr_i8 + 1_i8
-         end if
-      end do
-   end do
-
+   ntr_i8 = (2_i8 * rep1_i8 + 1_i8) * (2_i8 * rep2_i8 + 1_i8)
    if (ntr_i8 > limit_i8) then
       if (present(error)) then
          call fatal_error(error, &
@@ -597,24 +485,12 @@ subroutine get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, trans, max_rij, &
       return
    end if
 
-   ntr = int(ntr_i8)
-   allocate(trans(3, ntr))
-   idx = 0
-   do i1 = -rep1, rep1
-      d_perp2 = (area * area / m22) * real(i1, wp)**2
-      if (d_perp2 > r_dir2) cycle
-      c2 = -(m12 / m22) * real(i1, wp)
-      delta2 = sqrt(max(0.0_wp, r_dir2 - d_perp2) / m22)
-      i2_min = floor(c2 - delta2)
-      i2_max = ceiling(c2 + delta2)
-      do i2 = i2_min, i2_max
-         t_vec = real(i1, wp) * u1 + real(i2, wp) * u2
-         if (dot_product(t_vec, t_vec) <= r_dir2) then
-            idx = idx + 1
-            trans(:, idx) = t_vec
-         end if
-      end do
-   end do
+   rep1 = int(rep1_i8)
+   rep2 = int(rep2_i8)
+   lat2d = 0.0_wp
+   lat2d(:, 1) = u1
+   lat2d(:, 2) = u2
+   call get_lattice_points(lat2d, [rep1, rep2, 0], .true., trans)
 
 end subroutine get_ewald_dir_trans_2d
 
@@ -641,11 +517,11 @@ subroutine get_ewald_rec_trans_2d(a1, a2, alpha, trans, area, n_hat, &
    !> Optional error handling when resource limit is exceeded
    type(error_type), allocatable, intent(out), optional :: error
 
-   real(wp) :: n_vec(3), u1(3), u2(3), b1(3), b2(3), g_vec(3)
-   real(wp) :: m11, m12, m22, g11, g12, g22, rec_area
-   real(wp) :: tol_val, u_cut, gcut, gcut2, g_perp2, c2, delta2
+   real(wp) :: n_vec(3), u1(3), u2(3), b1(3), b2(3), rec2d(3, 3)
+   real(wp) :: m11, m12, m22, g11, g22, rec_area
+   real(wp) :: tol_val, u_cut, gcut
    integer(i8) :: rep1_i8, rep2_i8, ntr_i8, limit_i8
-   integer :: rep1, i1, i2, i2_min, i2_max, ntr, idx, limit
+   integer :: rep1, rep2, limit
 
    tol_val = epsilon(1.0_wp)
    if (present(tol)) tol_val = max(tol, tiny(1.0_wp))
@@ -653,7 +529,7 @@ subroutine get_ewald_rec_trans_2d(a1, a2, alpha, trans, area, n_hat, &
    if (present(max_trans)) limit = max_trans
    limit_i8 = int(limit, i8)
 
-   n_vec = cross_product_3d(a1, a2)
+   n_vec = crossprod(a1, a2)
    area = norm2(n_vec)
    n_hat = n_vec / area
 
@@ -664,7 +540,6 @@ subroutine get_ewald_rec_trans_2d(a1, a2, alpha, trans, area, n_hat, &
    b1 = (twopi / (area * area)) * (m22 * u1 - m12 * u2)
    b2 = (twopi / (area * area)) * (-m12 * u1 + m11 * u2)
    g11 = dot_product(b1, b1)
-   g12 = dot_product(b1, b2)
    g22 = dot_product(b2, b2)
    rec_area = twopi * twopi / area
 
@@ -674,7 +549,6 @@ subroutine get_ewald_rec_trans_2d(a1, a2, alpha, trans, area, n_hat, &
    do while (get_rec_term_2d(gcut, alpha, area) > tol_val)
       gcut = 1.1_wp * gcut
    end do
-   gcut2 = gcut * gcut
 
    rep1_i8 = max(2_i8, ceiling(gcut * sqrt(g22) / rec_area, kind=i8))
    rep2_i8 = max(2_i8, ceiling(gcut * sqrt(g11) / rec_area, kind=i8))
@@ -687,24 +561,7 @@ subroutine get_ewald_rec_trans_2d(a1, a2, alpha, trans, area, n_hat, &
       return
    end if
 
-   rep1 = int(rep1_i8)
-   ntr_i8 = 0_i8
-   do i1 = -rep1, rep1
-      g_perp2 = (rec_area * rec_area / g22) * real(i1, wp)**2
-      if (g_perp2 > gcut2) cycle
-      c2 = -(g12 / g22) * real(i1, wp)
-      delta2 = sqrt(max(0.0_wp, gcut2 - g_perp2) / g22)
-      i2_min = floor(c2 - delta2)
-      i2_max = ceiling(c2 + delta2)
-      do i2 = i2_min, i2_max
-         if (i1 == 0 .and. i2 == 0) cycle
-         g_vec = real(i1, wp) * b1 + real(i2, wp) * b2
-         if (dot_product(g_vec, g_vec) <= gcut2) then
-            ntr_i8 = ntr_i8 + 1_i8
-         end if
-      end do
-   end do
-
+   ntr_i8 = (2_i8 * rep1_i8 + 1_i8) * (2_i8 * rep2_i8 + 1_i8) - 1_i8
    if (ntr_i8 > limit_i8) then
       if (present(error)) then
          call fatal_error(error, &
@@ -714,25 +571,12 @@ subroutine get_ewald_rec_trans_2d(a1, a2, alpha, trans, area, n_hat, &
       return
    end if
 
-   ntr = int(ntr_i8)
-   allocate(trans(3, ntr))
-   idx = 0
-   do i1 = -rep1, rep1
-      g_perp2 = (rec_area * rec_area / g22) * real(i1, wp)**2
-      if (g_perp2 > gcut2) cycle
-      c2 = -(g12 / g22) * real(i1, wp)
-      delta2 = sqrt(max(0.0_wp, gcut2 - g_perp2) / g22)
-      i2_min = floor(c2 - delta2)
-      i2_max = ceiling(c2 + delta2)
-      do i2 = i2_min, i2_max
-         if (i1 == 0 .and. i2 == 0) cycle
-         g_vec = real(i1, wp) * b1 + real(i2, wp) * b2
-         if (dot_product(g_vec, g_vec) <= gcut2) then
-            idx = idx + 1
-            trans(:, idx) = g_vec
-         end if
-      end do
-   end do
+   rep1 = int(rep1_i8)
+   rep2 = int(rep2_i8)
+   rec2d = 0.0_wp
+   rec2d(:, 1) = b1
+   rec2d(:, 2) = b2
+   call get_lattice_points(rec2d, [rep1, rep2, 0], .false., trans)
 
 end subroutine get_ewald_rec_trans_2d
 
@@ -757,9 +601,9 @@ subroutine get_ewald_dir_trans_1d(a1, alpha, gam_min, trans, max_rij, &
    !> Optional error handling when resource limit is exceeded
    type(error_type), allocatable, intent(out), optional :: error
 
-   real(wp) :: kappa, kappa_max, tol_val, u_cut, rcut, r_disp, r_dir, len1
+   real(wp) :: lat1d(3, 3), kappa, kappa_max, tol_val, u_cut, rcut, r_disp, r_dir, len1
    integer(i8) :: rep1_i8, ntr_i8, limit_i8
-   integer :: rep1, ntr, i1, idx, limit
+   integer :: rep1, limit
 
    tol_val = epsilon(1.0_wp)
    if (present(tol)) tol_val = max(tol, tiny(1.0_wp))
@@ -793,13 +637,9 @@ subroutine get_ewald_dir_trans_1d(a1, alpha, gam_min, trans, max_rij, &
    end if
 
    rep1 = int(rep1_i8)
-   ntr = int(ntr_i8)
-   allocate(trans(3, ntr))
-   idx = 0
-   do i1 = -rep1, rep1
-      idx = idx + 1
-      trans(:, idx) = real(i1, wp) * a1
-   end do
+   lat1d = 0.0_wp
+   lat1d(:, 1) = a1
+   call get_lattice_points(lat1d, [rep1, 0, 0], .true., trans)
 
 end subroutine get_ewald_dir_trans_1d
 
@@ -824,9 +664,9 @@ subroutine get_ewald_rec_trans_1d(a1, alpha, trans, len1, u_hat, &
    !> Optional error handling when resource limit is exceeded
    type(error_type), allocatable, intent(out), optional :: error
 
-   real(wp) :: b1(3), tol_val, x_cut, gcut
+   real(wp) :: lat1d(3, 3), b1(3), tol_val, x_cut, gcut
    integer(i8) :: rep1_i8, ntr_i8, limit_i8
-   integer :: rep1, ntr, i1, idx, limit
+   integer :: rep1, limit
 
    tol_val = epsilon(1.0_wp)
    if (present(tol)) tol_val = max(tol, tiny(1.0_wp))
@@ -857,14 +697,9 @@ subroutine get_ewald_rec_trans_1d(a1, alpha, trans, len1, u_hat, &
    end if
 
    rep1 = int(rep1_i8)
-   ntr = int(ntr_i8)
-   allocate(trans(3, ntr))
-   idx = 0
-   do i1 = -rep1, rep1
-      if (i1 == 0) cycle
-      idx = idx + 1
-      trans(:, idx) = real(i1, wp) * b1
-   end do
+   lat1d = 0.0_wp
+   lat1d(:, 1) = b1
+   call get_lattice_points(lat1d, [rep1, 0, 0], .false., trans)
 
 end subroutine get_ewald_rec_trans_1d
 

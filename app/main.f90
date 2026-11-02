@@ -15,12 +15,12 @@
 
 program main
    use, intrinsic :: iso_fortran_env, only: output_unit, error_unit, input_unit
+   use mctc_cutoff, only: get_lattice_points, wrap_to_central_cell
    use mctc_env, only: error_type, fatal_error, get_argument, wp
    use mctc_io, only: structure_type, read_structure, filetype, get_filetype
    use multicharge, only: mchrg_model_type, mchrg_model, new_eeq2019_model, &
       & new_eeqbc2025_model, get_multicharge_version, &
       & write_ascii_model, write_ascii_properties, write_ascii_results
-   use multicharge_model, only: get_dir_trans, check_structure
    use multicharge_output, only: json_results
    implicit none
    character(len=*), parameter :: prog_name = "multicharge"
@@ -30,7 +30,7 @@ program main
    integer, allocatable :: input_format
    integer :: stat, unit, model_id
    type(error_type), allocatable :: error
-   type(structure_type) :: mol
+   type(structure_type) :: mol, mol_wrapped
    class(mchrg_model_type), allocatable :: model
    logical :: grad, json, exist
    real(wp), parameter :: cn_max = 8.0_wp, cutoff = 25.0_wp
@@ -111,15 +111,11 @@ program main
       allocate(dqlocdr(3, mol%nat, mol%nat), dqlocdL(3, 3, mol%nat))
    end if
 
-   call check_structure(mol, error)
-   if (allocated(error)) then
-      write(error_unit, "(a)") error%message
-      error stop
-   end if
-
-   call get_dir_trans(mol, trans, model%ncoord%cutoff)
-   call model%ncoord%get_coordination_number(mol, trans, cn, dcndr, dcndL)
-   call model%local_charge(mol, trans, qloc, dqlocdr, dqlocdL)
+   mol_wrapped = mol
+   call wrap_to_central_cell(mol_wrapped%xyz, mol_wrapped%lattice, mol_wrapped%periodic)
+   call get_lattice_points(mol_wrapped%periodic, mol_wrapped%lattice, model%ncoord%cutoff, trans)
+   call model%ncoord%get_coordination_number(mol_wrapped, trans, cn, dcndr, dcndL)
+   call model%local_charge(mol_wrapped, trans, qloc, dqlocdr, dqlocdL)
    call model%solve(mol, error, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL, &
       & energy, gradient, sigma, qvec, dqdr, dqdL)
 

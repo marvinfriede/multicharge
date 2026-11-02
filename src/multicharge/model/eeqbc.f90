@@ -22,15 +22,16 @@
 !> *J. Chem. Phys.*, **2025**, 162, 214109.
 !> DOI: [10.1063/5.0268978](https://dx.doi.org/10.1063/5.0268978)
 module multicharge_model_eeqbc
+   use mctc_cutoff, only: get_lattice_points, wrap_to_central_cell
    use mctc_env, only: error_type, fatal_error, wp
    use mctc_io, only: structure_type
    use mctc_io_constants, only: pi
    use mctc_ncoord, only: new_ncoord, cn_count
-   use mctc_wignerseitz, only: wignerseitz_cell
+   use mctc_wignerseitz, only: wignerseitz_cell, new_wignerseitz_cell
    use multicharge_blas, only: gemv, gemm
    use multicharge_model_cache, only: cache_container, model_cache
    use multicharge_model_hessian, only: coulomb_kernel, add_pair_hessian, add_chain_hessian
-   use multicharge_model_type, only: mchrg_model_type, get_dir_trans, init_wignerseitz_cell
+   use multicharge_model_type, only: mchrg_model_type
    implicit none
    private
 
@@ -90,6 +91,8 @@ module multicharge_model_eeqbc
       procedure :: get_dcmat_pbc => get_dcmat_3d
       !> Calculate constraint matrix derivatives (periodic, legacy alias)
       procedure :: get_dcmat_3d
+      !> Whether the charge model supports charged 1D/2D periodic unit cells
+      procedure :: supports_charged_lowd
    end type eeqbc_model
 
    real(wp), parameter :: sqrtpi = sqrt(pi)
@@ -103,6 +106,16 @@ module multicharge_model_eeqbc
    real(wp), parameter :: default_kbc = 0.65_wp
 
 contains
+
+!> Check whether the charge model supports charged 1D/2D periodic unit cells
+pure function supports_charged_lowd(self) result(supported)
+   !> Bond capacitor electronegativity equilibration model
+   class(eeqbc_model), intent(in) :: self
+   !> Whether charged 1D/2D periodic cells are supported
+   logical :: supported
+
+   supported = .true.
+end function supports_charged_lowd
 
 subroutine new_eeqbc_model(self, mol, error, chi, rad, &
    & eta, kcnchi, kqchi, kqeta, kcnrad, cap, avg_cn, rvdw, &
@@ -229,7 +242,7 @@ subroutine update(self, mol, cache, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL)
    select case (count(mol%periodic))
    case (1, 2, 3)
       ! Create WSC in periodic subspace
-      call init_wignerseitz_cell(ptr%wsc, mol)
+      call new_wignerseitz_cell(ptr%wsc, mol)
 
       ! Get full cmat sum over all WSC images (for get_xvec and xvec_derivs)
       call self%get_cmat_pbc(mol, ptr%wsc, ptr%cmat)
@@ -482,6 +495,7 @@ subroutine add_model_hessian(self, mol, error, cache, adj, hessian)
    real(wp), intent(inout) :: hessian(:, :)
 
    type(eeqbc_cache), pointer :: ptr
+   type(structure_type) :: mol_wrapped
    integer :: nat, iat, jat, izp, jzp, img, itr, nimg
    logical :: periodic
    real(wp) :: rij(3), vec(3), unit(3), r, gam, gi, gj, gii, gjj, gij, wsw
@@ -497,11 +511,13 @@ subroutine add_model_hessian(self, mol, error, cache, adj, hessian)
       return
    end if
    nat = mol%nat
+   mol_wrapped = mol
+   call wrap_to_central_cell(mol_wrapped%xyz, mol_wrapped%lattice, mol_wrapped%periodic)
    periodic = count(mol%periodic) > 0
    select case (count(mol%periodic))
    case (1, 2, 3)
       call get_eeqbc_dir_trans(self, mol, ptr%wsc, dtrans)
-      call get_dir_trans(mol, cn_trans, self%ncoord%cutoff)
+      call get_lattice_points(mol_wrapped%periodic, mol_wrapped%lattice, self%ncoord%cutoff, cn_trans)
    case default
       allocate(dtrans(3, 1), source=0.0_wp)
       allocate(cn_trans(3, 1), source=0.0_wp)
@@ -594,8 +610,8 @@ subroutine add_model_hessian(self, mol, error, cache, adj, hessian)
       end do
    end do
 
-   call self%ncoord%add_coordination_number_hessian(mol, cn_trans, dEdcn, hessian)
-   call self%ncoord_en%add_coordination_number_hessian(mol, cn_trans, dEdqloc, hessian)
+   call self%ncoord%add_coordination_number_hessian(mol_wrapped, cn_trans, dEdcn, hessian)
+   call self%ncoord_en%add_coordination_number_hessian(mol_wrapped, cn_trans, dEdqloc, hessian)
    call add_chain_hessian(ptr%dcndr, mixed, hessian, second)
    call add_chain_hessian(ptr%dqlocdr, mixed_loc, hessian)
 end subroutine add_model_hessian
@@ -1512,9 +1528,9 @@ subroutine get_eeqbc_dir_trans(self, mol, wsc, dtrans)
       end do
       kbc_eff = max(self%kbc, 1.0e-3_wp)
       rcut = max(self%ncoord%cutoff, rvdw_max * (1.0_wp + erf_tail / kbc_eff) + r_disp)
-      call get_dir_trans(mol, dtrans, rcut, wsc_wrapped=.true.)
+      call get_lattice_points(mol%periodic, mol%lattice, rcut, dtrans)
    case (3)
-      call get_dir_trans(mol, dtrans, self%ncoord%cutoff, wsc_wrapped=.true.)
+      call get_lattice_points(mol%periodic, mol%lattice, self%ncoord%cutoff, dtrans)
    case default
       allocate(dtrans(3, 1), source=0.0_wp)
    end select

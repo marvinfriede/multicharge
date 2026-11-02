@@ -22,22 +22,22 @@
 !> and S. Grimme, *J. Chem. Phys.*, **2019**, 150, 154122.
 !> DOI: [10.1063/1.5090222](https://dx.doi.org/10.1063/1.5090222)
 module multicharge_model_eeq
+   use mctc_cutoff, only: get_lattice_points, wrap_to_central_cell
    use mctc_env, only: error_type, fatal_error, wp
    use mctc_io, only: structure_type
    use mctc_io_constants, only: pi
-   use mctc_io_math, only: matdet_3x3
+   use mctc_io_math, only: matdet_3x3, outerprod
    use mctc_ncoord, only: new_ncoord, cn_count
-   use mctc_wignerseitz, only: wignerseitz_cell
+   use mctc_wignerseitz, only: wignerseitz_cell, new_wignerseitz_cell
    use multicharge_blas, only: gemm
-   use multicharge_ewald, only: get_alpha, erfc_exp_2d, &
+   use multicharge_ewald, only: get_alpha, erfc_exp_2d, get_periodic_axes, &
       & get_ewald_dir_trans_3d, get_ewald_rec_trans_3d, &
       & get_ewald_dir_trans_2d, get_ewald_rec_trans_2d, &
       & get_ewald_dir_trans_1d, get_ewald_rec_trans_1d, &
       & fast_f012_1d, fast_k012_1d
    use multicharge_model_cache, only: cache_container, model_cache
    use multicharge_model_hessian, only: coulomb_kernel, radial_hessian, add_pair_hessian, add_pair_block
-   use multicharge_model_type, only: mchrg_model_type, get_dir_trans, &
-      & init_wignerseitz_cell, get_periodic_axes
+   use multicharge_model_type, only: mchrg_model_type
    implicit none
    private
 
@@ -127,7 +127,7 @@ subroutine update(self, mol, cache, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL)
 
    if (any(mol%periodic)) then
       ! Create WSC
-      call init_wignerseitz_cell(ptr%wsc, mol)
+      call new_wignerseitz_cell(ptr%wsc, mol)
       call get_alpha(mol%lattice, ptr%alpha, mol%periodic)
    end if
 
@@ -225,6 +225,7 @@ subroutine add_model_hessian(self, mol, error, cache, adj, hessian)
    real(wp), intent(inout) :: hessian(:, :)
 
    type(eeq_cache), pointer :: ptr
+   type(structure_type) :: mol_wrapped
    integer :: iat, jat, izp, jzp, nat, ipair, npair, ii
    real(wp), parameter :: reg = 1.0e-14_wp
    real(wp) :: c, vec(3), r, gam, val, dr, drr, weight
@@ -246,8 +247,10 @@ subroutine add_model_hessian(self, mol, error, cache, adj, hessian)
       weight = -adj(iat)*self%kcnchi(izp)*(0.25_wp*c+reg)/(c+reg)**2.5_wp
       work(:, iat) = weight*dcndr(:, iat)
    end do
-   call get_dir_trans(mol, trans, self%ncoord%cutoff)
-   call self%ncoord%add_coordination_number_hessian(mol, trans, dEdcn, hessian)
+   mol_wrapped = mol
+   call wrap_to_central_cell(mol_wrapped%xyz, mol_wrapped%lattice, mol_wrapped%periodic)
+   call get_lattice_points(mol_wrapped%periodic, mol_wrapped%lattice, self%ncoord%cutoff, trans)
+   call self%ncoord%add_coordination_number_hessian(mol_wrapped, trans, dEdcn, hessian)
    call gemm(work, dcndr, hessian, transb="t", beta=1.0_wp)
 
    allocate(diagonal(3, 3, nat), source=0.0_wp)
@@ -388,7 +391,7 @@ subroutine add_periodic_hessian_2d(self, mol, wsc, alpha, qvec, adj, hessian, di
    if (present(error)) then
       if (allocated(error)) return
    end if
-   nn_mat = spread(n_hat, 2, 3) * spread(n_hat, 1, 3)
+   nn_mat = outerprod(n_hat, n_hat)
 
    npair = mol%nat*(mol%nat+1)/2
    !$omp parallel do default(none) schedule(runtime) &
@@ -432,9 +435,8 @@ subroutine add_periodic_hessian_2d(self, mol, wsc, alpha, qvec, adj, hessian, di
             fm = ep - em
             gauss = exp(-0.25_wp * g2 / (alpha * alpha) - (alpha * z)**2)
             pref = pi / (area * g_norm)
-            gg_mat = spread(g_vec, 2, 3) * spread(g_vec, 1, 3)
-            ng_sym = spread(g_vec, 2, 3) * spread(n_hat, 1, 3) &
-               & + spread(n_hat, 2, 3) * spread(g_vec, 1, 3)
+            gg_mat = outerprod(g_vec, g_vec)
+            ng_sym = outerprod(g_vec, n_hat) + outerprod(n_hat, g_vec)
             box = box + wsw * (-pref * cos_gv * fp * gg_mat &
                & - (pi / area) * sin_gv * fm * ng_sym &
                & + (pi / area) * cos_gv * (g_norm * fp - 4.0_wp * alpha * gauss / sqrtpi) * nn_mat)
@@ -484,7 +486,7 @@ subroutine add_periodic_hessian_1d(self, mol, wsc, alpha, qvec, adj, hessian, di
    if (present(error)) then
       if (allocated(error)) return
    end if
-   p_par = spread(u_hat, 2, 3) * spread(u_hat, 1, 3)
+   p_par = outerprod(u_hat, u_hat)
    p_perp = unity - p_par
    alp2 = alpha * alpha
 
@@ -518,7 +520,7 @@ subroutine add_periodic_hessian_1d(self, mol, wsc, alpha, qvec, adj, hessian, di
          r_perp = rij - dot_product(rij, u_hat) * u_hat
          rho2 = dot_product(r_perp, r_perp)
          y = alp2 * rho2
-         rr_mat = spread(r_perp, 2, 3) * spread(r_perp, 1, 3)
+         rr_mat = outerprod(r_perp, r_perp)
          do itr = 1, size(rtrans, 2)
             g_vec = rtrans(:, itr)
             g2 = dot_product(g_vec, g_vec)
@@ -528,9 +530,8 @@ subroutine add_periodic_hessian_1d(self, mol, wsc, alpha, qvec, adj, hessian, di
             cos_gv = cos(gv)
             sin_gv = sin(gv)
             call fast_k012_1d(x, y, k0, k1, k2)
-            gg_mat = spread(g_vec, 2, 3) * spread(g_vec, 1, 3)
-            rg_sym = spread(g_vec, 2, 3) * spread(r_perp, 1, 3) &
-               & + spread(r_perp, 2, 3) * spread(g_vec, 1, 3)
+            gg_mat = outerprod(g_vec, g_vec)
+            rg_sym = outerprod(g_vec, r_perp) + outerprod(r_perp, g_vec)
             box = box + (wsw / len1) * (-cos_gv * k0 * gg_mat &
                & + 2.0_wp * alp2 * sin_gv * k1 * rg_sym &
                & + cos_gv * (-2.0_wp * alp2 * k1 * p_perp + 4.0_wp * alp2 * alp2 * k2 * rr_mat))
@@ -1203,7 +1204,7 @@ subroutine get_damat_rec_2d(rij, alpha, area, n_hat, trans, dg, ds)
 
    z = dot_product(rij, n_hat)
    r_perp = z * n_hat
-   nn = spread(n_hat, 1, 3) * spread(n_hat, 2, 3)
+   nn = outerprod(n_hat, n_hat)
    i_par = unity - nn
 
    do itr = 1, size(trans, 2)
@@ -1223,9 +1224,8 @@ subroutine get_damat_rec_2d(rij, alpha, area, n_hat, trans, dg, ds)
 
       dg(:) = dg + pref * (-sin_gv * f_gz * g_vec + cos_gv * df_dz * n_hat)
 
-      outer_gg = spread(g_vec, 1, 3) * spread(g_vec, 2, 3)
-      outer_rg = spread(r_perp, 1, 3) * spread(g_vec, 2, 3) &
-         & + spread(g_vec, 1, 3) * spread(r_perp, 2, 3)
+      outer_gg = outerprod(g_vec, g_vec)
+      outer_rg = outerprod(r_perp, g_vec) + outerprod(g_vec, r_perp)
       ds(:, :) = ds + pref * cos_gv * (-f_gz * i_par &
          & + ((f_gz / g_norm - df_dg) / g_norm) * outer_gg + z * df_dz * nn) &
          & - pref * sin_gv * f_gz * outer_rg
@@ -1335,8 +1335,8 @@ subroutine get_damat_rec_1d(rij, alpha, len1, u_hat, trans, dg, ds)
    rho2 = dot_product(r_perp, r_perp)
    alp2 = alpha * alpha
    y = alp2 * rho2
-   p_par = spread(u_hat, 1, 3) * spread(u_hat, 2, 3)
-   outer_rr = spread(r_perp, 1, 3) * spread(r_perp, 2, 3)
+   p_par = outerprod(u_hat, u_hat)
+   outer_rr = outerprod(r_perp, r_perp)
 
    do itr = 1, size(trans, 2)
       g_vec = trans(:, itr)
@@ -1352,8 +1352,7 @@ subroutine get_damat_rec_1d(rij, alpha, len1, u_hat, trans, dg, ds)
       dg(:) = dg - (sin_gv * k0 / len1) * g_vec &
          & - (2.0_wp * alp2 * cos_gv * k1 / len1) * r_perp
 
-      outer_rg = spread(g_vec, 1, 3) * spread(r_perp, 2, 3) &
-         & + spread(r_perp, 1, 3) * spread(g_vec, 2, 3)
+      outer_rg = outerprod(g_vec, r_perp) + outerprod(r_perp, g_vec)
       ds(:, :) = ds + (cos_gv * (2.0_wp * exp_xy + 2.0_wp * y * k1 - k0) / len1) * p_par &
          & - (2.0_wp * alp2 * cos_gv * k1 / len1) * outer_rr &
          & - (sin_gv * k0 / len1) * outer_rg

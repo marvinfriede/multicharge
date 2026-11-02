@@ -14,6 +14,7 @@
 ! limitations under the License.
 
 module test_pbc
+   use mctc_cutoff, only: get_lattice_points
    use mctc_env, only: wp
    use mctc_env_testing, only: new_unittest, unittest_type, error_type, &
       & test_failed
@@ -26,7 +27,6 @@ module test_pbc
    use multicharge_model_cache, only: cache_container
    use multicharge_model_eeq, only: eeq_cache
    use multicharge_model_eeqbc, only: eeqbc_model, eeqbc_cache
-   use multicharge_model_type, only: get_dir_trans
    use multicharge_param, only: new_eeq2019_model, new_eeqbc2025_model
    implicit none
    private
@@ -120,7 +120,7 @@ subroutine gen_test(error, mol, model, qref, eref)
    real(wp), allocatable :: energy(:)
    real(wp), allocatable :: qvec(:)
 
-   call get_dir_trans(mol, trans, cutoff)
+   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
 
    allocate(cn(mol%nat), qloc(mol%nat))
 
@@ -185,7 +185,7 @@ subroutine test_numgrad(error, mol, model)
    real(wp), allocatable :: numgrad(:, :)
    real(wp) :: er, el
 
-   call get_dir_trans(mol, trans, cutoff)
+   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
 
    allocate(cn(mol%nat), dcndr(3, mol%nat, mol%nat), dcndL(3, 3, mol%nat), &
       & qloc(mol%nat), dqlocdr(3, mol%nat, mol%nat), dqlocdL(3, 3, mol%nat), &
@@ -261,7 +261,7 @@ subroutine test_numsigma(error, mol, model)
    real(wp), allocatable :: lattr(:, :), xyz(:, :)
    real(wp) :: er, el, eps(3, 3), numsigma(3, 3), sigma(3, 3), lattice(3, 3)
 
-   call get_dir_trans(mol, trans, cutoff)
+   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
 
    allocate(cn(mol%nat), dcndr(3, mol%nat, mol%nat), dcndL(3, 3, mol%nat), &
       & qloc(mol%nat), dqlocdr(3, mol%nat, mol%nat), dqlocdL(3, 3, mol%nat), &
@@ -348,7 +348,7 @@ subroutine test_dbdr(error, mol, model)
    type(cache_container), allocatable :: cache
    allocate(cache)
 
-   call get_dir_trans(mol, trans, cutoff)
+   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
 
    allocate(cn(mol%nat), dcndr(3, mol%nat, mol%nat), dcndL(3, 3, mol%nat), &
       & qloc(mol%nat), dqlocdr(3, mol%nat, mol%nat), dqlocdL(3, 3, mol%nat), &
@@ -429,7 +429,7 @@ subroutine test_dbdL(error, mol, model)
       & xvecr(mol%nat + 1), xvecl(mol%nat + 1), numsigma(3, 3, mol%nat + 1), &
       & dbdr(3, mol%nat, mol%nat + 1), dbdL(3, 3, mol%nat + 1), xyz(3, mol%nat))
 
-   call get_dir_trans(mol, trans, cutoff)
+   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
 
    numsigma = 0.0_wp
 
@@ -527,7 +527,7 @@ subroutine test_dadr(error, mol, model)
       thr2_local = thr2
    end select
 
-   call get_dir_trans(mol, trans, cutoff)
+   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
 
    ! Obtain the vector of charges
    call model%ncoord%get_coordination_number(mol, trans, cn)
@@ -622,7 +622,7 @@ subroutine test_dadL(error, mol, model)
       & dadr(3, mol%nat, mol%nat + 1), dadL(3, 3, mol%nat + 1), atrace(3, mol%nat), &
       & numsigma(3, 3, mol%nat + 1), qvec(mol%nat), xyz(3, mol%nat))
 
-   call get_dir_trans(mol, trans, cutoff)
+   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
 
    call model%ncoord%get_coordination_number(mol, trans, cn)
    call model%local_charge(mol, trans, qloc)
@@ -709,7 +709,7 @@ subroutine test_numdqdr(error, mol, model)
    real(wp), allocatable :: ql(:), qr(:), dqdr(:, :, :), dqdL(:, :, :)
    real(wp), allocatable :: numdr(:, :, :)
 
-   call get_dir_trans(mol, trans, cutoff)
+   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
 
    allocate(cn(mol%nat), dcndr(3, mol%nat, mol%nat), dcndL(3, 3, mol%nat), &
       & qloc(mol%nat), dqlocdr(3, mol%nat, mol%nat), dqlocdL(3, 3, mol%nat), &
@@ -777,7 +777,7 @@ subroutine test_numdqdL(error, mol, model)
    real(wp), allocatable :: lattr(:, :), xyz(:, :), numdL(:, :, :)
    real(wp) :: eps(3, 3), lattice(3, 3)
 
-   call get_dir_trans(mol, trans, cutoff)
+   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
 
    allocate(cn(mol%nat), dcndr(3, mol%nat, mol%nat), dcndL(3, 3, mol%nat), &
       & qloc(mol%nat), dqlocdr(3, mol%nat, mol%nat), dqlocdL(3, 3, mol%nat), &
@@ -1691,7 +1691,7 @@ subroutine test_ewald_convergence_1d_2d(error)
          model%rad = 2.2_wp * model%rad
       end if
 
-      call get_dir_trans(mol, trans, 25.0_wp)
+      call get_lattice_points(mol%periodic, mol%lattice, 25.0_wp, trans)
       call model%ncoord%get_coordination_number(mol, trans, cn)
       call model%local_charge(mol, trans, qloc)
       call model%update(mol, cache, cn, qloc)

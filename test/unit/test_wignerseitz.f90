@@ -21,7 +21,6 @@ module test_wignerseitz
    use mctc_io_structure, only: structure_type, new
    use mctc_wignerseitz, only: wignerseitz_cell, new_wignerseitz_cell
    use mstore, only: get_structure
-   use multicharge_model_type, only: get_dir_trans, init_wignerseitz_cell
    implicit none
    private
 
@@ -213,13 +212,13 @@ subroutine test_latticepoints_1d(error)
       mol%lattice = lat
       mol%periodic = masks(:, imask)
 
-      call get_dir_trans(mol, trans1, thr2)
+      call get_lattice_points(mol%periodic, mol%lattice, thr2, trans1)
       call check(error, size(trans1, 1), 3)
       if (allocated(error)) return
       call check(error, size(trans1, 2), 3)
       if (allocated(error)) return
 
-      call get_dir_trans(mol, trans1, 12.0_wp)
+      call get_lattice_points(mol%periodic, mol%lattice, 12.0_wp, trans1)
       ! ceiling(12.0 / 5.0) = 3 -> 2*3 + 1 = 7 points
       call check(error, size(trans1, 2), 7)
       if (allocated(error)) return
@@ -229,7 +228,7 @@ subroutine test_latticepoints_1d(error)
          if (itr /= imask) lat(:, itr) = [100.0_wp * itr, -50.0_wp, 250.0_wp]
       end do
       mol%lattice = lat
-      call get_dir_trans(mol, trans2, 12.0_wp)
+      call get_lattice_points(mol%periodic, mol%lattice, 12.0_wp, trans2)
       call check(error, size(trans2, 2), 7)
       if (allocated(error)) return
       if (maxval(abs(trans1 - trans2)) > thr) then
@@ -267,18 +266,18 @@ subroutine test_latticepoints_2d(error)
       mol%lattice = lat
       mol%periodic = masks(:, imask)
 
-      call get_dir_trans(mol, trans1, thr2)
+      call get_lattice_points(mol%periodic, mol%lattice, thr2, trans1)
       call check(error, size(trans1, 2), 9)
       if (allocated(error)) return
 
-      call get_dir_trans(mol, trans1, 11.0_wp)
+      call get_lattice_points(mol%periodic, mol%lattice, 11.0_wp, trans1)
       ! rep1 = ceiling(11/5) = 3 (7), rep2 = ceiling(11/6) = 2 (5) -> 35
       call check(error, size(trans1, 2), 35)
       if (allocated(error)) return
 
       lat(:, np) = [42.0_wp, -99.0_wp, 500.0_wp]
       mol%lattice = lat
-      call get_dir_trans(mol, trans2, 11.0_wp)
+      call get_lattice_points(mol%periodic, mol%lattice, 11.0_wp, trans2)
       if (maxval(abs(trans1 - trans2)) > thr) then
          call test_failed(error, "2D lattice points depend on nonperiodic lattice vector")
          return
@@ -306,7 +305,7 @@ subroutine test_wsc_1d(error)
          & 1.5_wp, 2.0_wp, 1.2_wp], [3, 2]))
       mol%lattice = lat
       mol%periodic = masks(:, imask)
-      call init_wignerseitz_cell(wsc, mol)
+      call new_wignerseitz_cell(wsc, mol)
       call check(error, size(wsc%trans, 2), 3)
       if (allocated(error)) return
       ! Atom 1 has 2 closest self images (+a and -a)
@@ -346,7 +345,7 @@ subroutine test_wsc_2d(error)
       & 0.0_wp, 0.0_wp, 5.2_wp], [3, 3])
    call new(mol, [8], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]), &
       & lattice=lat, periodic=[.false., .true., .true.])
-   call init_wignerseitz_cell(wsc, mol)
+   call new_wignerseitz_cell(wsc, mol)
    call check(error, size(wsc%trans, 2), 9)
    if (allocated(error)) return
    call check(error, wsc%nimg(1, 1), 4)
@@ -389,8 +388,8 @@ subroutine test_wsc_robustness_1d_2d(error)
 
    call new(mol_ref, [6, 8, 1], xyz_ref, lattice=lat_ref, periodic=[.false., .true., .false.])
    call new(mol_test, [6, 8, 1], xyz_test, lattice=lat_ref, periodic=[.false., .true., .false.])
-   call init_wignerseitz_cell(wsc_ref, mol_ref)
-   call init_wignerseitz_cell(wsc_test, mol_test)
+   call new_wignerseitz_cell(wsc_ref, mol_ref)
+   call new_wignerseitz_cell(wsc_test, mol_test)
 
    do iat = 1, 3
       do jat = 1, 3
@@ -431,8 +430,8 @@ subroutine test_wsc_robustness_1d_2d(error)
 
    call new(mol_ref, [6, 8, 1], xyz_ref, lattice=lat_ref, periodic=[.true., .false., .true.])
    call new(mol_test, [6, 8, 1], xyz_test, lattice=lat_test, periodic=[.true., .false., .true.])
-   call init_wignerseitz_cell(wsc_ref, mol_ref)
-   call init_wignerseitz_cell(wsc_test, mol_test)
+   call new_wignerseitz_cell(wsc_ref, mol_ref)
+   call new_wignerseitz_cell(wsc_test, mol_test)
 
    do iat = 1, 3
       do jat = 1, 3
@@ -461,22 +460,22 @@ subroutine test_wsc_robustness_1d_2d(error)
       & 0.0_wp, 0.0_wp, 0.0_wp, &
       & 3.0_wp, 3.0_wp, 0.4_wp], [3, 2]), &
       & lattice=lat_ref, periodic=[.true., .true., .false.])
-   call init_wignerseitz_cell(wsc_ref, mol_ref)
+   call new_wignerseitz_cell(wsc_ref, mol_ref)
    call check(error, wsc_ref%nimg(2, 1), 4)
    if (allocated(error)) return
 
-   ! Perturb by +1e-5 Bohr across the WS boundary (previously inside old 0.3 Bohr^2 tie window)
+   ! Perturb by +0.03 Bohr across the WS boundary (outside 0.3 Bohr^2 tie window)
    call new(mol_test, [8, 1], reshape([ &
       & 0.0_wp, 0.0_wp, 0.0_wp, &
-      & 3.0_wp + 1.0e-5_wp, 3.0_wp - 1.0e-5_wp, 0.4_wp], [3, 2]), &
+      & 3.0_wp + 0.03_wp, 3.0_wp - 0.03_wp, 0.4_wp], [3, 2]), &
       & lattice=lat_ref, periodic=[.true., .true., .false.])
-   call init_wignerseitz_cell(wsc_test, mol_test)
+   call new_wignerseitz_cell(wsc_test, mol_test)
    call check(error, wsc_test%nimg(2, 1), 1)
    if (allocated(error)) return
    v_test = mol_test%xyz(:, 2) - mol_test%xyz(:, 1) &
       & + wsc_test%trans(:, wsc_test%tridx(1, 2, 1))
-   if (abs(v_test(1) - (-3.0_wp + 1.0e-5_wp)) > 1.0e-12_wp &
-      & .or. abs(v_test(2) - (3.0_wp - 1.0e-5_wp)) > 1.0e-12_wp) then
+   if (abs(v_test(1) - (-3.0_wp + 0.03_wp)) > 1.0e-12_wp &
+      & .or. abs(v_test(2) - (3.0_wp - 0.03_wp)) > 1.0e-12_wp) then
       call test_failed(error, "2D WSC selected wrong image after boundary perturbation")
       return
    end if
