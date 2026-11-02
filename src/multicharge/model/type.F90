@@ -473,6 +473,7 @@ subroutine solve(self, mol, error, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL, &
       if (allocated(cache%ainv)) deallocate(cache%ainv)
       if (allocated(cache%dqdr)) deallocate(cache%dqdr)
       if (allocated(cache%raw)) deallocate(cache%raw)
+      if (allocated(cache%error)) deallocate(cache%error)
       if (.not. dcn) then
          call fatal_error(error, "Retaining charge response requires CN derivatives")
          return
@@ -481,11 +482,19 @@ subroutine solve(self, mol, error, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL, &
 
    ! Update cache
    call self%update(mol, cache, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL)
+   if (allocated(cache%error)) then
+      call move_alloc(cache%error, error)
+      return
+   end if
 
    ! Setup the Coulomb matrix
    ndim = mol%nat + 1
    allocate(amat(ndim, ndim))
    call self%get_coulomb_matrix(mol, cache, amat)
+   if (allocated(cache%error)) then
+      call move_alloc(cache%error, error)
+      return
+   end if
 
    ! Get RHS of ES equation
    allocate(xvec(ndim))
@@ -545,6 +554,10 @@ subroutine solve(self, mol, error, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL, &
       allocate(dxdr(3, mol%nat, ndim), dxdL(3, 3, ndim))
       call self%get_xvec_derivs(mol, cache, dxdr, dxdL)
       call self%get_coulomb_derivs(mol, cache, vrhs, dadr, dadL, atrace)
+      if (allocated(cache%error)) then
+         call move_alloc(cache%error, error)
+         return
+      end if
       do iat = 1, mol%nat
          dadr(:, iat, iat) = atrace(:, iat) + dadr(:, iat, iat)
       end do
@@ -629,6 +642,10 @@ subroutine add_charge_hessian(self, mol, error, weights, hessian, cache)
    ! Reuse the first derivative action with the adjoint in place of the charges.
    allocate(dadr(3, nat, nat+1), dadL(3, 3, nat+1), atrace(3, nat))
    call self%get_coulomb_derivs(mol, cache, adj, dadr, dadL, atrace)
+   if (allocated(cache%error)) then
+      call move_alloc(cache%error, error)
+      return
+   end if
    do iat = 1, nat
       dadr(:, iat, iat) = dadr(:, iat, iat) + atrace(:, iat)
    end do

@@ -14,16 +14,20 @@
 ! limitations under the License.
 
 module multicharge_ewald
-   use mctc_env, only: wp
+   use mctc_env, only: error_type, fatal_error, i8, wp
    use mctc_io_constants, only: pi
    use mctc_io_math, only: matdet_3x3, matinv_3x3
    implicit none
    private
 
-   public :: get_alpha, get_alpha_2d, erfc_exp_2d
+   public :: get_alpha, get_alpha_2d, erfc_exp_2d, reduce_basis_2d
    public :: get_ewald_dir_trans_2d, get_ewald_rec_trans_2d
    public :: get_ewald_dir_trans_1d, get_ewald_rec_trans_1d
    public :: fast_f012_1d, fast_k012_1d
+   public :: default_max_ewald_trans
+
+   !> Default resource limit on Ewald translation vectors per summation
+   integer, parameter :: default_max_ewald_trans = 200000
 
    real(wp), parameter :: twopi = 2 * pi
    real(wp), parameter :: eps = sqrt(epsilon(0.0_wp))
@@ -164,6 +168,41 @@ subroutine get_alpha_1d_subspace(a1, alpha)
 end subroutine get_alpha_1d_subspace
 
 
+!> Reduce a 2D periodic lattice basis to its shortest Lagrange-Gauss basis
+pure subroutine reduce_basis_2d(a1, a2, u1, u2)
+   !> First periodic lattice vector
+   real(wp), intent(in) :: a1(3)
+   !> Second periodic lattice vector
+   real(wp), intent(in) :: a2(3)
+   !> First reduced basis vector (shortest nonzero lattice vector)
+   real(wp), intent(out) :: u1(3)
+   !> Second reduced basis vector
+   real(wp), intent(out) :: u2(3)
+
+   real(wp) :: tmp(3), n1, n2, mu
+   integer :: iter
+
+   u1 = a1
+   u2 = a2
+   do iter = 1, 100
+      n1 = dot_product(u1, u1)
+      n2 = dot_product(u2, u2)
+      if (n1 > n2) then
+         tmp = u1
+         u1 = u2
+         u2 = tmp
+         n1 = n2
+      end if
+      if (n1 <= tiny(1.0_wp)) exit
+      mu = anint(dot_product(u1, u2) / n1)
+      if (abs(mu) < 0.5_wp) exit
+      u2 = u2 - mu * u1
+   end do
+   if (dot_product(u1, u2) < 0.0_wp) u2 = -u2
+
+end subroutine reduce_basis_2d
+
+
 !> Select optimal Ewald alpha for a 2D periodic slab from its two periodic vectors
 subroutine get_alpha_2d(a1, a2, alpha)
    !> First periodic lattice vector
@@ -173,17 +212,18 @@ subroutine get_alpha_2d(a1, a2, alpha)
    !> Optimal Ewald splitting parameter
    real(wp), intent(out) :: alpha
 
-   real(wp) :: area, m11, m12, m22, p_lat(3, 2), rec_lat(3, 2)
+   real(wp) :: u1(3), u2(3), area, m11, m12, m22, p_lat(3, 2), rec_lat(3, 2)
 
-   area = norm2(cross_product_3d(a1, a2))
-   m11 = dot_product(a1, a1)
-   m12 = dot_product(a1, a2)
-   m22 = dot_product(a2, a2)
+   call reduce_basis_2d(a1, a2, u1, u2)
+   area = norm2(cross_product_3d(u1, u2))
+   m11 = dot_product(u1, u1)
+   m12 = dot_product(u1, u2)
+   m22 = dot_product(u2, u2)
 
-   p_lat(:, 1) = a1
-   p_lat(:, 2) = a2
-   rec_lat(:, 1) = (twopi / (area * area)) * (m22 * a1 - m12 * a2)
-   rec_lat(:, 2) = (twopi / (area * area)) * (-m12 * a1 + m11 * a2)
+   p_lat(:, 1) = u1
+   p_lat(:, 2) = u2
+   rec_lat(:, 1) = (twopi / (area * area)) * (m22 * u1 - m12 * u2)
+   rec_lat(:, 2) = (twopi / (area * area)) * (-m12 * u1 + m11 * u2)
 
    call search_alpha(p_lat, rec_lat, area, eps, alpha, get_rec_term_2d)
 
@@ -215,7 +255,8 @@ end function erfc_exp_2d
 
 
 !> Generate converged direct-space lattice translations for 2D Ewald
-pure subroutine get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, trans)
+subroutine get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, trans, max_rij, &
+      & tol, max_trans, error)
    !> First periodic lattice vector
    real(wp), intent(in) :: a1(3)
    !> Second periodic lattice vector
@@ -226,26 +267,102 @@ pure subroutine get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, trans)
    real(wp), intent(in) :: gam_min
    !> Direct-space lattice translations (3, ntrans)
    real(wp), allocatable, intent(out) :: trans(:, :)
+   !> Optional maximum pair displacement within the Wigner-Seitz cell
+   real(wp), intent(in), optional :: max_rij
+   !> Optional target numerical accuracy threshold
+   real(wp), intent(in), optional :: tol
+   !> Optional resource limit on translation count
+   integer, intent(in), optional :: max_trans
+   !> Optional error handling when resource limit is exceeded
+   type(error_type), allocatable, intent(out), optional :: error
 
-   real(wp) :: kappa, rcut, area, len1, len2
-   integer :: rep1, rep2, ntr, i1, i2, idx
+   real(wp) :: u1(3), u2(3), t_vec(3)
+   real(wp) :: kappa, kappa_max, tol_val, u_cut, rcut, r_disp, r_dir, r_dir2
+   real(wp) :: area, m11, m12, m22, len1, len2, d_perp2, c2, delta2
+   integer(i8) :: rep1_i8, rep2_i8, ntr_i8, limit_i8
+   integer :: rep1, i1, i2, i2_min, i2_max, ntr, idx, limit
+
+   tol_val = epsilon(1.0_wp)
+   if (present(tol)) tol_val = max(tol, tiny(1.0_wp))
+   limit = default_max_ewald_trans
+   if (present(max_trans)) limit = max_trans
+   limit_i8 = int(limit, i8)
+
+   call reduce_basis_2d(a1, a2, u1, u2)
+   area = norm2(cross_product_3d(u1, u2))
+   m11 = dot_product(u1, u1)
+   m12 = dot_product(u1, u2)
+   m22 = dot_product(u2, u2)
+   len1 = sqrt(m11)
+   len2 = sqrt(m22)
 
    kappa = min(alpha, gam_min)
-   rcut = 6.0_wp / kappa
-   len1 = norm2(a1)
-   len2 = norm2(a2)
-   area = norm2(cross_product_3d(a1, a2))
+   kappa_max = max(alpha, gam_min)
+   u_cut = sqrt(max(42.25_wp, -log(tol_val) &
+      & + log(max(1.0_wp, 4.0_wp * kappa_max**3)) + 4.0_wp))
+   rcut = u_cut / kappa
+   do while (get_dir_term(rcut, kappa) > tol_val)
+      rcut = 1.1_wp * rcut
+   end do
 
-   rep1 = min(20, max(2, ceiling(rcut * len2 / area)))
-   rep2 = min(20, max(2, ceiling(rcut * len1 / area)))
+   r_disp = 0.5_wp * (len1 + len2)
+   if (present(max_rij)) r_disp = max(r_disp, max_rij)
+   r_dir = max(rcut + r_disp, 2.0_wp * max(len1, len2))
+   r_dir2 = r_dir * r_dir
 
-   ntr = (2 * rep1 + 1) * (2 * rep2 + 1)
+   rep1_i8 = max(2_i8, ceiling(r_dir * len2 / area, kind=i8))
+   rep2_i8 = max(2_i8, ceiling(r_dir * len1 / area, kind=i8))
+   if (rep1_i8 > limit_i8 .or. rep2_i8 > limit_i8) then
+      if (present(error)) then
+         call fatal_error(error, &
+            & "2D Ewald direct-space summation exceeds maximum translation limit")
+      end if
+      allocate(trans(3, 0))
+      return
+   end if
+
+   rep1 = int(rep1_i8)
+   ntr_i8 = 0_i8
+   do i1 = -rep1, rep1
+      d_perp2 = (area * area / m22) * real(i1, wp)**2
+      if (d_perp2 > r_dir2) cycle
+      c2 = -(m12 / m22) * real(i1, wp)
+      delta2 = sqrt(max(0.0_wp, r_dir2 - d_perp2) / m22)
+      i2_min = floor(c2 - delta2)
+      i2_max = ceiling(c2 + delta2)
+      do i2 = i2_min, i2_max
+         t_vec = real(i1, wp) * u1 + real(i2, wp) * u2
+         if (dot_product(t_vec, t_vec) <= r_dir2) then
+            ntr_i8 = ntr_i8 + 1_i8
+         end if
+      end do
+   end do
+
+   if (ntr_i8 > limit_i8) then
+      if (present(error)) then
+         call fatal_error(error, &
+            & "2D Ewald direct-space summation exceeds maximum translation limit")
+      end if
+      allocate(trans(3, 0))
+      return
+   end if
+
+   ntr = int(ntr_i8)
    allocate(trans(3, ntr))
    idx = 0
    do i1 = -rep1, rep1
-      do i2 = -rep2, rep2
-         idx = idx + 1
-         trans(:, idx) = real(i1, wp) * a1 + real(i2, wp) * a2
+      d_perp2 = (area * area / m22) * real(i1, wp)**2
+      if (d_perp2 > r_dir2) cycle
+      c2 = -(m12 / m22) * real(i1, wp)
+      delta2 = sqrt(max(0.0_wp, r_dir2 - d_perp2) / m22)
+      i2_min = floor(c2 - delta2)
+      i2_max = ceiling(c2 + delta2)
+      do i2 = i2_min, i2_max
+         t_vec = real(i1, wp) * u1 + real(i2, wp) * u2
+         if (dot_product(t_vec, t_vec) <= r_dir2) then
+            idx = idx + 1
+            trans(:, idx) = t_vec
+         end if
       end do
    end do
 
@@ -253,7 +370,8 @@ end subroutine get_ewald_dir_trans_2d
 
 
 !> Generate converged nonzero reciprocal-space lattice vectors for 2D Ewald
-pure subroutine get_ewald_rec_trans_2d(a1, a2, alpha, trans, area, n_hat)
+subroutine get_ewald_rec_trans_2d(a1, a2, alpha, trans, area, n_hat, &
+      & tol, max_trans, error)
    !> First periodic lattice vector
    real(wp), intent(in) :: a1(3)
    !> Second periodic lattice vector
@@ -266,32 +384,103 @@ pure subroutine get_ewald_rec_trans_2d(a1, a2, alpha, trans, area, n_hat)
    real(wp), intent(out) :: area
    !> Unit normal to the 2D periodic plane
    real(wp), intent(out) :: n_hat(3)
+   !> Optional target numerical accuracy threshold
+   real(wp), intent(in), optional :: tol
+   !> Optional resource limit on reciprocal vector count
+   integer, intent(in), optional :: max_trans
+   !> Optional error handling when resource limit is exceeded
+   type(error_type), allocatable, intent(out), optional :: error
 
-   real(wp) :: n_vec(3), m11, m12, m22, b1(3), b2(3), gcut
-   integer :: rep1, rep2, ntr, i1, i2, idx
+   real(wp) :: n_vec(3), u1(3), u2(3), b1(3), b2(3), g_vec(3)
+   real(wp) :: m11, m12, m22, g11, g12, g22, rec_area
+   real(wp) :: tol_val, u_cut, gcut, gcut2, g_perp2, c2, delta2
+   integer(i8) :: rep1_i8, rep2_i8, ntr_i8, limit_i8
+   integer :: rep1, i1, i2, i2_min, i2_max, ntr, idx, limit
+
+   tol_val = epsilon(1.0_wp)
+   if (present(tol)) tol_val = max(tol, tiny(1.0_wp))
+   limit = default_max_ewald_trans
+   if (present(max_trans)) limit = max_trans
+   limit_i8 = int(limit, i8)
 
    n_vec = cross_product_3d(a1, a2)
    area = norm2(n_vec)
    n_hat = n_vec / area
 
-   m11 = dot_product(a1, a1)
-   m12 = dot_product(a1, a2)
-   m22 = dot_product(a2, a2)
-   b1 = (twopi / (area * area)) * (m22 * a1 - m12 * a2)
-   b2 = (twopi / (area * area)) * (-m12 * a1 + m11 * a2)
+   call reduce_basis_2d(a1, a2, u1, u2)
+   m11 = dot_product(u1, u1)
+   m12 = dot_product(u1, u2)
+   m22 = dot_product(u2, u2)
+   b1 = (twopi / (area * area)) * (m22 * u1 - m12 * u2)
+   b2 = (twopi / (area * area)) * (-m12 * u1 + m11 * u2)
+   g11 = dot_product(b1, b1)
+   g12 = dot_product(b1, b2)
+   g22 = dot_product(b2, b2)
+   rec_area = twopi * twopi / area
 
-   gcut = 12.0_wp * alpha
-   rep1 = min(20, max(2, ceiling(gcut * sqrt(m11) / twopi)))
-   rep2 = min(20, max(2, ceiling(gcut * sqrt(m22) / twopi)))
+   u_cut = sqrt(max(42.25_wp, -log(tol_val) &
+      & + log(max(1.0_wp, 8.0_wp * sqrt(pi) * max(alpha, alpha**3) / area)) + 4.0_wp))
+   gcut = max(2.0_wp * alpha * u_cut, 2.0_wp * max(sqrt(g11), sqrt(g22)))
+   do while (get_rec_term_2d(gcut, alpha, area) > tol_val)
+      gcut = 1.1_wp * gcut
+   end do
+   gcut2 = gcut * gcut
 
-   ntr = (2 * rep1 + 1) * (2 * rep2 + 1) - 1
+   rep1_i8 = max(2_i8, ceiling(gcut * sqrt(g22) / rec_area, kind=i8))
+   rep2_i8 = max(2_i8, ceiling(gcut * sqrt(g11) / rec_area, kind=i8))
+   if (rep1_i8 > limit_i8 .or. rep2_i8 > limit_i8) then
+      if (present(error)) then
+         call fatal_error(error, &
+            & "2D Ewald reciprocal-space summation exceeds maximum translation limit")
+      end if
+      allocate(trans(3, 0))
+      return
+   end if
+
+   rep1 = int(rep1_i8)
+   ntr_i8 = 0_i8
+   do i1 = -rep1, rep1
+      g_perp2 = (rec_area * rec_area / g22) * real(i1, wp)**2
+      if (g_perp2 > gcut2) cycle
+      c2 = -(g12 / g22) * real(i1, wp)
+      delta2 = sqrt(max(0.0_wp, gcut2 - g_perp2) / g22)
+      i2_min = floor(c2 - delta2)
+      i2_max = ceiling(c2 + delta2)
+      do i2 = i2_min, i2_max
+         if (i1 == 0 .and. i2 == 0) cycle
+         g_vec = real(i1, wp) * b1 + real(i2, wp) * b2
+         if (dot_product(g_vec, g_vec) <= gcut2) then
+            ntr_i8 = ntr_i8 + 1_i8
+         end if
+      end do
+   end do
+
+   if (ntr_i8 > limit_i8) then
+      if (present(error)) then
+         call fatal_error(error, &
+            & "2D Ewald reciprocal-space summation exceeds maximum translation limit")
+      end if
+      allocate(trans(3, 0))
+      return
+   end if
+
+   ntr = int(ntr_i8)
    allocate(trans(3, ntr))
    idx = 0
    do i1 = -rep1, rep1
-      do i2 = -rep2, rep2
+      g_perp2 = (rec_area * rec_area / g22) * real(i1, wp)**2
+      if (g_perp2 > gcut2) cycle
+      c2 = -(g12 / g22) * real(i1, wp)
+      delta2 = sqrt(max(0.0_wp, gcut2 - g_perp2) / g22)
+      i2_min = floor(c2 - delta2)
+      i2_max = ceiling(c2 + delta2)
+      do i2 = i2_min, i2_max
          if (i1 == 0 .and. i2 == 0) cycle
-         idx = idx + 1
-         trans(:, idx) = real(i1, wp) * b1 + real(i2, wp) * b2
+         g_vec = real(i1, wp) * b1 + real(i2, wp) * b2
+         if (dot_product(g_vec, g_vec) <= gcut2) then
+            idx = idx + 1
+            trans(:, idx) = g_vec
+         end if
       end do
    end do
 
@@ -299,7 +488,8 @@ end subroutine get_ewald_rec_trans_2d
 
 
 !> Generate converged direct-space lattice translations for 1D Ewald
-pure subroutine get_ewald_dir_trans_1d(a1, alpha, gam_min, trans)
+subroutine get_ewald_dir_trans_1d(a1, alpha, gam_min, trans, max_rij, &
+      & tol, max_trans, error)
    !> Periodic lattice vector
    real(wp), intent(in) :: a1(3)
    !> Ewald splitting parameter
@@ -308,16 +498,52 @@ pure subroutine get_ewald_dir_trans_1d(a1, alpha, gam_min, trans)
    real(wp), intent(in) :: gam_min
    !> Direct-space lattice translations (3, ntrans)
    real(wp), allocatable, intent(out) :: trans(:, :)
+   !> Optional maximum pair displacement within the Wigner-Seitz cell
+   real(wp), intent(in), optional :: max_rij
+   !> Optional target numerical accuracy threshold
+   real(wp), intent(in), optional :: tol
+   !> Optional resource limit on translation count
+   integer, intent(in), optional :: max_trans
+   !> Optional error handling when resource limit is exceeded
+   type(error_type), allocatable, intent(out), optional :: error
 
-   real(wp) :: kappa, rcut, len1
-   integer :: rep1, ntr, i1, idx
+   real(wp) :: kappa, kappa_max, tol_val, u_cut, rcut, r_disp, r_dir, len1
+   integer(i8) :: rep1_i8, ntr_i8, limit_i8
+   integer :: rep1, ntr, i1, idx, limit
 
-   kappa = min(alpha, gam_min)
-   rcut = 6.0_wp / kappa
+   tol_val = epsilon(1.0_wp)
+   if (present(tol)) tol_val = max(tol, tiny(1.0_wp))
+   limit = default_max_ewald_trans
+   if (present(max_trans)) limit = max_trans
+   limit_i8 = int(limit, i8)
+
    len1 = norm2(a1)
-   rep1 = min(40, max(2, ceiling(rcut / len1)))
+   kappa = min(alpha, gam_min)
+   kappa_max = max(alpha, gam_min)
+   u_cut = sqrt(max(42.25_wp, -log(tol_val) &
+      & + log(max(1.0_wp, 4.0_wp * kappa_max**3)) + 4.0_wp))
+   rcut = u_cut / kappa
+   do while (get_dir_term(rcut, kappa) > tol_val)
+      rcut = 1.1_wp * rcut
+   end do
 
-   ntr = 2 * rep1 + 1
+   r_disp = 0.5_wp * len1
+   if (present(max_rij)) r_disp = max(r_disp, max_rij)
+   r_dir = rcut + r_disp
+
+   rep1_i8 = max(2_i8, ceiling(r_dir / len1, kind=i8))
+   ntr_i8 = 2_i8 * rep1_i8 + 1_i8
+   if (ntr_i8 > limit_i8) then
+      if (present(error)) then
+         call fatal_error(error, &
+            & "1D Ewald direct-space summation exceeds maximum translation limit")
+      end if
+      allocate(trans(3, 0))
+      return
+   end if
+
+   rep1 = int(rep1_i8)
+   ntr = int(ntr_i8)
    allocate(trans(3, ntr))
    idx = 0
    do i1 = -rep1, rep1
@@ -329,7 +555,8 @@ end subroutine get_ewald_dir_trans_1d
 
 
 !> Generate converged nonzero reciprocal-space lattice vectors for 1D Ewald
-pure subroutine get_ewald_rec_trans_1d(a1, alpha, trans, len1, u_hat)
+subroutine get_ewald_rec_trans_1d(a1, alpha, trans, len1, u_hat, &
+      & tol, max_trans, error)
    !> Periodic lattice vector
    real(wp), intent(in) :: a1(3)
    !> Ewald splitting parameter
@@ -340,18 +567,47 @@ pure subroutine get_ewald_rec_trans_1d(a1, alpha, trans, len1, u_hat)
    real(wp), intent(out) :: len1
    !> Unit vector along the 1D periodic axis
    real(wp), intent(out) :: u_hat(3)
+   !> Optional target numerical accuracy threshold
+   real(wp), intent(in), optional :: tol
+   !> Optional resource limit on reciprocal vector count
+   integer, intent(in), optional :: max_trans
+   !> Optional error handling when resource limit is exceeded
+   type(error_type), allocatable, intent(out), optional :: error
 
-   real(wp) :: b1(3), gcut
-   integer :: rep1, ntr, i1, idx
+   real(wp) :: b1(3), tol_val, x_cut, gcut
+   integer(i8) :: rep1_i8, ntr_i8, limit_i8
+   integer :: rep1, ntr, i1, idx, limit
+
+   tol_val = epsilon(1.0_wp)
+   if (present(tol)) tol_val = max(tol, tiny(1.0_wp))
+   limit = default_max_ewald_trans
+   if (present(max_trans)) limit = max_trans
+   limit_i8 = int(limit, i8)
 
    len1 = norm2(a1)
    u_hat = a1 / len1
    b1 = (twopi / len1) * u_hat
 
-   gcut = 12.0_wp * alpha
-   rep1 = min(40, max(2, ceiling(gcut * len1 / twopi)))
+   x_cut = max(42.25_wp, -log(tol_val) &
+      & + log(max(1.0_wp, 4.0_wp * max(1.0_wp, alpha**2) / len1)) + 4.0_wp)
+   gcut = 2.0_wp * alpha * sqrt(x_cut)
+   do while (get_rec_term_1d(gcut, alpha, len1) > tol_val)
+      gcut = 1.1_wp * gcut
+   end do
 
-   ntr = 2 * rep1
+   rep1_i8 = max(2_i8, ceiling(gcut * len1 / twopi, kind=i8))
+   ntr_i8 = 2_i8 * rep1_i8
+   if (ntr_i8 > limit_i8) then
+      if (present(error)) then
+         call fatal_error(error, &
+            & "1D Ewald reciprocal-space summation exceeds maximum translation limit")
+      end if
+      allocate(trans(3, 0))
+      return
+   end if
+
+   rep1 = int(rep1_i8)
+   ntr = int(ntr_i8)
    allocate(trans(3, ntr))
    idx = 0
    do i1 = -rep1, rep1

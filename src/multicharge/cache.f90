@@ -18,7 +18,7 @@
 
 !> Cache for charge models
 module multicharge_model_cache
-   use mctc_env, only: wp
+   use mctc_env, only: error_type, wp
    use mctc_io, only: structure_type
    use mctc_wignerseitz, only: wignerseitz_cell
    implicit none
@@ -29,6 +29,8 @@ module multicharge_model_cache
       class(*), allocatable :: raw
       !> Optional charge-response data, refreshed by get_charges/solve.
       real(wp), allocatable :: qvec(:), ainv(:, :), dqdr(:, :, :)
+      !> Error raised during cache update or matrix evaluation
+      type(error_type), allocatable :: error
    end type cache_container
 
    !> Cache for the charge model

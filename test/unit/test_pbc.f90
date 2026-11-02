@@ -20,8 +20,11 @@ module test_pbc
    use mctc_io_structure, only: structure_type, new
    use mstore, only: get_structure
    use multicharge, only: get_charges
+   use multicharge_ewald, only: get_ewald_dir_trans_1d, get_ewald_rec_trans_1d, &
+      & get_ewald_dir_trans_2d, get_ewald_rec_trans_2d
    use multicharge_model, only: mchrg_model_type
    use multicharge_model_cache, only: cache_container
+   use multicharge_model_eeq, only: eeq_cache
    use multicharge_model_eeqbc, only: eeqbc_model
    use multicharge_model_type, only: get_dir_trans
    use multicharge_param, only: new_eeq2019_model, new_eeqbc2025_model
@@ -65,6 +68,7 @@ subroutine collect_pbc(testsuite)
       & new_unittest("eeqbc-2d-all-masks", test_eeqbc_2d_all_masks), &
       & new_unittest("eeq-1d-all-masks", test_eeq_1d_all_masks), &
       & new_unittest("eeq-2d-all-masks", test_eeq_2d_all_masks), &
+      & new_unittest("ewald-convergence-1d-2d", test_ewald_convergence_1d_2d), &
       & new_unittest("degenerate-lattice-error", test_degenerate_lattice_error) &
       & ]
 
@@ -1532,5 +1536,211 @@ subroutine test_eeq_1d_all_masks(error)
    end if
    deallocate(expected)
 end subroutine test_eeq_1d_all_masks
+
+
+!> Verify uncapped Ewald convergence, resource-limit errors, and alpha invariance
+!> across adverse 1D and 2D geometries.
+subroutine test_ewald_convergence_1d_2d(error)
+   !> Error handling
+   type(error_type), allocatable, intent(out) :: error
+
+   type(error_type), allocatable :: expected
+   type(structure_type) :: mol
+   class(mchrg_model_type), allocatable :: model
+   type(cache_container) :: cache
+   real(wp), allocatable :: dtrans(:, :), rtrans(:, :), cn(:), qloc(:), trans(:, :)
+   real(wp) :: a1(3), a2(3), u_hat(3), n_hat(3), len1, area
+   real(wp) :: amat_ref(4, 4), amat_cur(4, 4)
+   real(wp) :: dadr_ref(3, 3, 4), dadL_ref(3, 3, 4), atrace_ref(3, 3)
+   real(wp) :: dadr_cur(3, 3, 4), dadL_cur(3, 3, 4), atrace_cur(3, 3)
+   real(wp) :: hess_ref(9, 9), hess_cur(9, 9)
+   real(wp) :: qvec(4), adj(4), alphas(3)
+   integer :: ia, ig
+
+   ! 1. Verify removal of hard caps (>40 in 1D, >20 per axis in 2D)
+   a1 = [2.0_wp, 0.0_wp, 0.0_wp]
+   call get_ewald_dir_trans_1d(a1, 0.06_wp, 0.06_wp, dtrans, error=error)
+   if (allocated(error)) return
+   if (size(dtrans, 2) <= 81) then
+      call test_failed(error, "1D direct-space Ewald remains capped at 40 shells")
+      return
+   end if
+
+   a1 = [45.0_wp, 0.0_wp, 0.0_wp]
+   call get_ewald_rec_trans_1d(a1, 0.50_wp, rtrans, len1, u_hat, error=error)
+   if (allocated(error)) return
+   if (size(rtrans, 2) <= 80) then
+      call test_failed(error, "1D reciprocal-space Ewald remains capped at 40 shells")
+      return
+   end if
+
+   a1 = [3.0_wp, 0.0_wp, 0.0_wp]
+   a2 = [0.0_wp, 3.0_wp, 0.0_wp]
+   call get_ewald_dir_trans_2d(a1, a2, 0.08_wp, 0.08_wp, dtrans, error=error)
+   if (allocated(error)) return
+   if (size(dtrans, 2) <= 1681) then
+      call test_failed(error, "2D direct-space Ewald remains capped at 20 shells")
+      return
+   end if
+
+   a1 = [30.0_wp, 0.0_wp, 0.0_wp]
+   a2 = [0.0_wp, 30.0_wp, 0.0_wp]
+   call get_ewald_rec_trans_2d(a1, a2, 0.45_wp, rtrans, area, n_hat, error=error)
+   if (allocated(error)) return
+   if (size(rtrans, 2) <= 1680) then
+      call test_failed(error, "2D reciprocal-space Ewald remains capped at 20 shells")
+      return
+   end if
+
+   ! 2. Verify explicit resource-limit error reporting (no silent truncation)
+   call get_ewald_dir_trans_1d([2.0_wp, 0.0_wp, 0.0_wp], 0.06_wp, 0.06_wp, dtrans, &
+      & max_trans=10, error=expected)
+   if (.not. allocated(expected)) then
+      call test_failed(error, "1D direct-space resource limit was not enforced")
+      return
+   end if
+   deallocate(expected)
+
+   call get_ewald_rec_trans_1d([45.0_wp, 0.0_wp, 0.0_wp], 0.50_wp, rtrans, len1, u_hat, &
+      & max_trans=10, error=expected)
+   if (.not. allocated(expected)) then
+      call test_failed(error, "1D reciprocal-space resource limit was not enforced")
+      return
+   end if
+   deallocate(expected)
+
+   call get_ewald_dir_trans_2d([3.0_wp, 0.0_wp, 0.0_wp], [0.0_wp, 3.0_wp, 0.0_wp], &
+      & 0.08_wp, 0.08_wp, dtrans, max_trans=10, error=expected)
+   if (.not. allocated(expected)) then
+      call test_failed(error, "2D direct-space resource limit was not enforced")
+      return
+   end if
+   deallocate(expected)
+
+   call get_ewald_rec_trans_2d([30.0_wp, 0.0_wp, 0.0_wp], [0.0_wp, 30.0_wp, 0.0_wp], &
+      & 0.45_wp, rtrans, area, n_hat, max_trans=10, error=expected)
+   if (.not. allocated(expected)) then
+      call test_failed(error, "2D reciprocal-space resource limit was not enforced")
+      return
+   end if
+   deallocate(expected)
+
+   ! 3. Alpha-invariance across adverse 1D and 2D geometries:
+   ! ig = 1: Short-period 1D wire with broad Gaussians
+   ! ig = 2: Strongly skewed 2D lattice a1=(10,0,0), a2=(9,2,0)
+   ! ig = 3: High-aspect-ratio 2D lattice (3.6 x 18.0 bohr)
+   ! ig = 4: Large 2D periodic cell (16.0 x 18.0 bohr)
+   alphas = [0.16_wp, 0.26_wp, 0.40_wp]
+   qvec = [0.35_wp, -0.55_wp, 0.20_wp, 0.05_wp]
+   adj = [-0.40_wp, 0.25_wp, 0.15_wp, 0.0_wp]
+   allocate(cn(3), qloc(3))
+
+   do ig = 1, 4
+      select case (ig)
+      case (1)
+         call new(mol, [8, 1, 6], reshape([ &
+            & 0.0_wp, 0.0_wp, 0.0_wp, &
+            & 1.1_wp, 0.8_wp, -0.3_wp, &
+            & 0.5_wp, -0.9_wp, 0.6_wp], [3, 3]), charge=0.0_wp, &
+            & lattice=reshape([ &
+            & 2.6_wp, 0.0_wp, 0.0_wp, &
+            & 0.0_wp, 20.0_wp, 0.0_wp, &
+            & 0.0_wp, 0.0_wp, 20.0_wp], [3, 3]), &
+            & periodic=[.true., .false., .false.])
+      case (2)
+         call new(mol, [8, 1, 1], reshape([ &
+            & 0.1_wp, 0.1_wp, -0.2_wp, &
+            & 1.2_wp, 0.5_wp, 0.3_wp, &
+            & -0.4_wp, 0.9_wp, 0.1_wp], [3, 3]), charge=0.0_wp, &
+            & lattice=reshape([ &
+            & 10.0_wp, 0.0_wp, 0.0_wp, &
+            & 9.0_wp, 2.0_wp, 0.0_wp, &
+            & 0.0_wp, 0.0_wp, 20.0_wp], [3, 3]), &
+            & periodic=[.true., .true., .false.])
+      case (3)
+         call new(mol, [8, 1, 1], reshape([ &
+            & 0.0_wp, 0.0_wp, -0.2_wp, &
+            & 1.4_wp, 1.5_wp, 0.4_wp, &
+            & 0.7_wp, 4.2_wp, -0.1_wp], [3, 3]), charge=0.0_wp, &
+            & lattice=reshape([ &
+            & 3.6_wp, 0.0_wp, 0.0_wp, &
+            & 0.0_wp, 18.0_wp, 0.0_wp, &
+            & 0.0_wp, 0.0_wp, 20.0_wp], [3, 3]), &
+            & periodic=[.true., .true., .false.])
+      case (4)
+         call new(mol, [8, 1, 1], reshape([ &
+            & 0.0_wp, 0.0_wp, -0.2_wp, &
+            & 1.8_wp, 0.4_wp, 0.3_wp, &
+            & -0.5_wp, 1.7_wp, 0.2_wp], [3, 3]), charge=0.0_wp, &
+            & lattice=reshape([ &
+            & 16.0_wp, 0.0_wp, 0.0_wp, &
+            & 0.0_wp, 18.0_wp, 0.0_wp, &
+            & 0.0_wp, 0.0_wp, 20.0_wp], [3, 3]), &
+            & periodic=[.true., .true., .false.])
+      end select
+
+      call new_eeq2019_model(mol, model, error)
+      if (allocated(error)) return
+      if (ig == 1) then
+         ! Broaden Gaussian charge widths on the short-period 1D wire
+         model%rad = 2.2_wp * model%rad
+      end if
+
+      call get_dir_trans(mol, trans, 25.0_wp)
+      call model%ncoord%get_coordination_number(mol, trans, cn)
+      call model%local_charge(mol, trans, qloc)
+      call model%update(mol, cache, cn, qloc)
+      allocate(cache%qvec(4), source=qvec)
+      select type (raw => cache%raw)
+      type is (eeq_cache)
+         allocate(raw%dcndr(3, 3, 3), source=0.0_wp)
+      end select
+
+      do ia = 1, size(alphas)
+         select type (raw => cache%raw)
+         type is (eeq_cache)
+            raw%alpha = alphas(ia)
+         end select
+         call model%get_coulomb_matrix(mol, cache, amat_cur)
+         if (allocated(cache%error)) then
+            call move_alloc(cache%error, error)
+            return
+         end if
+         call model%get_coulomb_derivs(mol, cache, qvec, dadr_cur, dadL_cur, atrace_cur)
+         if (allocated(cache%error)) then
+            call move_alloc(cache%error, error)
+            return
+         end if
+         hess_cur = 0.0_wp
+         call model%add_model_hessian(mol, error, cache, adj, hess_cur)
+         if (allocated(error)) return
+
+         if (ia == 1) then
+            amat_ref = amat_cur
+            dadr_ref = dadr_cur
+            dadL_ref = dadL_cur
+            atrace_ref = atrace_cur
+            hess_ref = hess_cur
+         else
+            if (maxval(abs(amat_cur - amat_ref)) > 1.0e-11_wp) then
+               call test_failed(error, "Coulomb matrix depends on Ewald alpha")
+               return
+            end if
+            if (maxval(abs(dadr_cur - dadr_ref)) > 1.0e-11_wp &
+               & .or. maxval(abs(dadL_cur - dadL_ref)) > 1.0e-11_wp &
+               & .or. maxval(abs(atrace_cur - atrace_ref)) > 1.0e-11_wp) then
+               call test_failed(error, "Coulomb derivatives depend on Ewald alpha")
+               return
+            end if
+            if (maxval(abs(hess_cur - hess_ref)) > 1.0e-10_wp) then
+               call test_failed(error, "Coulomb Hessian depends on Ewald alpha")
+               return
+            end if
+         end if
+      end do
+      deallocate(cache%qvec, cache%raw)
+   end do
+
+end subroutine test_ewald_convergence_1d_2d
 
 end module test_pbc
