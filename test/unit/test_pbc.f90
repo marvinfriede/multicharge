@@ -2261,24 +2261,39 @@ subroutine test_eeqbc_convergence_1d_2d(error)
 
 end subroutine test_eeqbc_convergence_1d_2d
 
-!> Regression test for DFT-D4 issue #358: neutral water-helium complex across
-!> progressively increasing separations up to 1000 A (~1889.73 Bohr) in 0D, 1D, and 2D,
-!> compared directly against isolated H2O and isolated He fragments.
+!> Regression and characterization test for DFT-D4 issue #358: asymptotic EEQBC
+!> decoupling across 0D, 1D, and 2D for:
+!> 1. Neutral water-helium complex across separations up to 1000 A (~1889.73 Bohr),
+!> 2. Two identical neutral molecules (H2O...H2O) with zero net charge transfer,
+!> 3. Two dissimilar neutral molecules (H2O...NH3) with analytical Lagrange multiplier check,
+!> 4. Charged fragment combinations (H2O...NH4+, Q = +1), and
+!> 5. Invariance under fragment reordering and rigid translation.
 subroutine test_eeqbc_water_helium_358(error)
    type(error_type), allocatable, intent(out) :: error
 
    real(wp), parameter :: aa2au = 1.8897261246257702_wp
    real(wp), parameter :: z_seps(5) = [20.0_wp, 35.0_wp, 60.0_wp, 200.0_wp, 1000.0_wp * aa2au]
-   type(structure_type) :: mol_h2o, mol_he, mol_comb
+   real(wp), parameter :: q_he_0d_ref = 0.07309211_wp
+   type(structure_type) :: mol_h2o, mol_he, mol_comb, mol_nh3, mol_nh4
+   type(structure_type) :: mol_dimer, mol_het, mol_het_rev, mol_het_shift, mol_chg
    class(mchrg_model_type), allocatable :: model_eeq, model_eeqbc
-   type(cache_container) :: cache_eeq, cache_eeqbc, cache_h2o, cache_he
+   type(cache_container) :: cache_eeq, cache_eeqbc, cache_h2o, cache_he, cache_nh3, cache_nh4
    real(wp) :: xyz_h2o(3, 3), xyz_he(3, 1), xyz_comb(3, 4), lat(3, 3)
+   real(wp) :: xyz_nh3(3, 4), xyz_nh4(3, 5), xyz_dimer(3, 6), xyz_het(3, 7), xyz_het_rev(3, 7)
+   real(wp) :: xyz_het_shift(3, 7), xyz_chg(3, 8), shift_vec(3)
    real(wp) :: q_h2o_bc(3), dqdr_h2o_bc(3, 3, 3), dqdL_h2o_bc(3, 3, 3), q_he_bc(1)
+   real(wp) :: q_nh3_bc(4), q_nh4_bc(5)
    real(wp) :: amat_h2o(4, 4), cmat_h2o(4, 4), amat_he(2, 2), cmat_he(2, 2)
-   real(wp) :: res_h2o(3), res_he, lam_h2o, lam_he, lam_comb
+   real(wp) :: amat_nh3(5, 5), cmat_nh3(5, 5), amat_nh4(6, 6), cmat_nh4(6, 6)
+   real(wp) :: res_h2o(3), res_he, res_nh3(4), res_nh4(5)
+   real(wp) :: lam_h2o, lam_he, lam_nh3, lam_nh4, lam_comb
    real(wp) :: q_eeq(4, 5), dqdr_eeq(3, 4, 4), dqdL_eeq(3, 3, 4)
    real(wp) :: q_bc(4, 5), dqdr_bc(3, 4, 4), dqdL_bc(3, 3, 4)
    real(wp) :: amat_eeq(5, 5), amat_bc(5, 5), cmat_bc(5, 5)
+   real(wp) :: q_dimer(6), dqdr_dimer(3, 6, 6), dqdL_dimer(3, 3, 6)
+   real(wp) :: q_het(7), dqdr_het(3, 7, 7), dqdL_het(3, 3, 7), amat_het(8, 8), hess_het(21, 21)
+   real(wp) :: q_het_rev(7), q_het_shift(7), weights7(7)
+   real(wp) :: q_chg(8), q_chg_ref(8), dqdr_chg(3, 8, 8), dqdL_chg(3, 3, 8), amat_chg(9, 9)
    logical :: pmask(3)
    integer :: idim, ir
 
@@ -2287,7 +2302,20 @@ subroutine test_eeqbc_water_helium_358(error)
       &  0.0000000000_wp,  1.4309280000_wp, -0.8856320000_wp, &
       &  0.0000000000_wp, -1.4309280000_wp, -0.8856320000_wp], [3, 3])
    xyz_he = reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1])
+   xyz_nh3 = reshape([ &
+      &  0.0000000000_wp,  0.0000000000_wp,  0.2190000000_wp, &
+      &  0.0000000000_wp,  1.7720000000_wp, -0.5110000000_wp, &
+      &  1.5345970000_wp, -0.8860000000_wp, -0.5110000000_wp, &
+      & -1.5345970000_wp, -0.8860000000_wp, -0.5110000000_wp], [3, 4])
+   xyz_nh4 = reshape([ &
+      &  0.0000000000_wp,  0.0000000000_wp,  0.0000000000_wp, &
+      &  1.1200000000_wp,  1.1200000000_wp,  1.1200000000_wp, &
+      &  1.1200000000_wp, -1.1200000000_wp, -1.1200000000_wp, &
+      & -1.1200000000_wp,  1.1200000000_wp, -1.1200000000_wp, &
+      & -1.1200000000_wp, -1.1200000000_wp,  1.1200000000_wp], [3, 5])
    xyz_comb(:, 1:3) = xyz_h2o
+   weights7 = [0.4_wp, -0.2_wp, 0.1_wp, -0.3_wp, 0.25_wp, -0.15_wp, 0.35_wp]
+   shift_vec = [1.7_wp, -2.3_wp, 4.1_wp]
 
    lat = reshape([ &
       & 12.0_wp,  0.0_wp,    0.0_wp, &
@@ -2302,13 +2330,17 @@ subroutine test_eeqbc_water_helium_358(error)
       case default; pmask = [.false., .false., .false.]
       end select
 
-      ! 1. Isolated water and isolated helium reference fragments
+      ! 1. Isolated H2O, He, NH3, and NH4+ reference fragments
       if (idim == 0) then
          call new(mol_h2o, [8, 1, 1], xyz_h2o, charge=0.0_wp)
          call new(mol_he, [2], xyz_he, charge=0.0_wp)
+         call new(mol_nh3, [7, 1, 1, 1], xyz_nh3, charge=0.0_wp)
+         call new(mol_nh4, [7, 1, 1, 1, 1], xyz_nh4, charge=1.0_wp)
       else
          call new(mol_h2o, [8, 1, 1], xyz_h2o, charge=0.0_wp, lattice=lat, periodic=pmask)
          call new(mol_he, [2], xyz_he, charge=0.0_wp, lattice=lat, periodic=pmask)
+         call new(mol_nh3, [7, 1, 1, 1], xyz_nh3, charge=0.0_wp, lattice=lat, periodic=pmask)
+         call new(mol_nh4, [7, 1, 1, 1, 1], xyz_nh4, charge=1.0_wp, lattice=lat, periodic=pmask)
       end if
 
       if (allocated(model_eeqbc)) deallocate(model_eeqbc)
@@ -2341,6 +2373,32 @@ subroutine test_eeqbc_water_helium_358(error)
          call test_failed(error, "Isolated neutral He atom has non-zero charge")
          return
       end if
+
+      deallocate(model_eeqbc)
+      call new_eeqbc2025_model(mol_nh3, model_eeqbc, error)
+      if (allocated(error)) return
+      call get_charges(model_eeqbc, mol_nh3, error, q_nh3_bc, cache=cache_nh3)
+      if (allocated(error)) return
+      call model_eeqbc%get_coulomb_matrix(mol_nh3, cache_nh3, amat_nh3)
+      cmat_nh3 = 0.0_wp
+      select type (raw => cache_nh3%raw)
+      type is (eeqbc_cache)
+         cmat_nh3 = raw%cmat
+      end select
+      lam_nh3 = cache_nh3%qvec(5)
+
+      deallocate(model_eeqbc)
+      call new_eeqbc2025_model(mol_nh4, model_eeqbc, error)
+      if (allocated(error)) return
+      call get_charges(model_eeqbc, mol_nh4, error, q_nh4_bc, cache=cache_nh4)
+      if (allocated(error)) return
+      call model_eeqbc%get_coulomb_matrix(mol_nh4, cache_nh4, amat_nh4)
+      cmat_nh4 = 0.0_wp
+      select type (raw => cache_nh4%raw)
+      type is (eeqbc_cache)
+         cmat_nh4 = raw%cmat
+      end select
+      lam_nh4 = cache_nh4%qvec(6)
 
       ! 2. Combined H2O...He system across progressive separations up to 1000 A
       do ir = 1, size(z_seps)
@@ -2408,10 +2466,141 @@ subroutine test_eeqbc_water_helium_358(error)
                call test_failed(error, "EEQBC failed to suppress asymptotic charge response on He")
                return
             end if
+            if (idim == 0 .and. (abs(q_bc(4, ir) + lam_comb) > 1.0e-14_wp &
+               & .or. abs(q_bc(4, ir) - q_he_0d_ref) > 1.0e-7_wp)) then
+               call test_failed(error, "0D H2O...He asymptotic He charge deviates from dftd4 EEQBC reference")
+               return
+            end if
          end if
       end do
       if (abs(q_eeq(4, 5) - q_eeq(4, 1)) < 1.0e-4_wp) then
          call test_failed(error, "Expected distance-dependent 1/R coupling in unscreened EEQ")
+         return
+      end if
+
+      ! 3. Two identical neutral molecules (H2O...H2O) at 1000 A:
+      !    Equal isolated Lagrange multipliers => strictly zero asymptotic charge transfer
+      xyz_dimer(:, 1:3) = xyz_h2o
+      xyz_dimer(1:2, 4:6) = xyz_h2o(1:2, :)
+      xyz_dimer(3, 4:6) = xyz_h2o(3, :) + z_seps(5)
+      if (idim == 0) then
+         call new(mol_dimer, [8, 1, 1, 8, 1, 1], xyz_dimer, charge=0.0_wp)
+      else
+         call new(mol_dimer, [8, 1, 1, 8, 1, 1], xyz_dimer, charge=0.0_wp, lattice=lat, periodic=pmask)
+      end if
+      deallocate(model_eeqbc)
+      call new_eeqbc2025_model(mol_dimer, model_eeqbc, error)
+      if (allocated(error)) return
+      call get_charges(model_eeqbc, mol_dimer, error, q_dimer, dqdr_dimer, dqdL_dimer, &
+         & cache=cache_eeqbc)
+      if (allocated(error)) return
+      if (abs(sum(q_dimer(1:3))) > 1.0e-13_wp &
+         & .or. abs(sum(q_dimer(4:6))) > 1.0e-13_wp &
+         & .or. maxval(abs(q_dimer(1:3) - q_h2o_bc)) > 1.0e-13_wp &
+         & .or. maxval(abs(q_dimer(4:6) - q_h2o_bc)) > 1.0e-13_wp &
+         & .or. abs(cache_eeqbc%qvec(7) - lam_h2o) > 1.0e-13_wp &
+         & .or. maxval(abs(sum(dqdr_dimer(:, 1:3, :), dim=2))) > 1.0e-13_wp &
+         & .or. maxval(abs(sum(dqdr_dimer(:, 4:6, :), dim=2))) > 1.0e-13_wp) then
+         call test_failed(error, "Identical neutral H2O dimer at 1000 A failed zero-transfer check")
+         return
+      end if
+
+      ! 4. Two dissimilar neutral molecules (H2O...NH3) at 1000 A:
+      !    Verify exact block-diagonal decoupling, vanishing rigid-translation inter-fragment
+      !    derivatives, analytical Lagrange-multiplier identity, and reordering/shift invariance
+      xyz_het(:, 1:3) = xyz_h2o
+      xyz_het(1:2, 4:7) = xyz_nh3(1:2, :)
+      xyz_het(3, 4:7) = xyz_nh3(3, :) + z_seps(5)
+      xyz_het_rev(:, 1:4) = xyz_het(:, 4:7)
+      xyz_het_rev(:, 5:7) = xyz_het(:, 1:3)
+      do ir = 1, 7
+         xyz_het_shift(:, ir) = xyz_het(:, ir) + shift_vec
+      end do
+      if (idim == 0) then
+         call new(mol_het, [8, 1, 1, 7, 1, 1, 1], xyz_het, charge=0.0_wp)
+         call new(mol_het_rev, [7, 1, 1, 1, 8, 1, 1], xyz_het_rev, charge=0.0_wp)
+         call new(mol_het_shift, [8, 1, 1, 7, 1, 1, 1], xyz_het_shift, charge=0.0_wp)
+      else
+         call new(mol_het, [8, 1, 1, 7, 1, 1, 1], xyz_het, charge=0.0_wp, lattice=lat, periodic=pmask)
+         call new(mol_het_rev, [7, 1, 1, 1, 8, 1, 1], xyz_het_rev, charge=0.0_wp, &
+            & lattice=lat, periodic=pmask)
+         call new(mol_het_shift, [8, 1, 1, 7, 1, 1, 1], xyz_het_shift, charge=0.0_wp, &
+            & lattice=lat, periodic=pmask)
+      end if
+      deallocate(model_eeqbc)
+      call new_eeqbc2025_model(mol_het, model_eeqbc, error)
+      if (allocated(error)) return
+      call get_charges(model_eeqbc, mol_het, error, q_het, dqdr_het, dqdL_het, cache=cache_eeqbc)
+      if (allocated(error)) return
+      call model_eeqbc%get_coulomb_matrix(mol_het, cache_eeqbc, amat_het)
+      hess_het = 0.0_wp
+      call add_charge_hessian(model_eeqbc, mol_het, error, weights7, hess_het, cache_eeqbc)
+      if (allocated(error)) return
+
+      lam_comb = cache_eeqbc%qvec(8)
+      res_h2o = matmul(amat_h2o(1:3, 1:3), q_het(1:3) - q_h2o_bc) + (lam_comb - lam_h2o)
+      res_nh3 = matmul(amat_nh3(1:4, 1:4), q_het(4:7) - q_nh3_bc) + (lam_comb - lam_nh3)
+      if (maxval(abs(amat_het(1:3, 4:7))) > 1.0e-14_wp &
+         & .or. maxval(abs(res_h2o)) > 1.0e-13_wp &
+         & .or. maxval(abs(res_nh3)) > 1.0e-13_wp &
+         & .or. maxval(abs(sum(dqdr_het(:, 1:3, :), dim=2))) > 1.0e-13_wp &
+         & .or. maxval(abs(sum(dqdr_het(:, 4:7, :), dim=2))) > 1.0e-13_wp) then
+         call test_failed(error, "Dissimilar neutral H2O...NH3 complex failed decoupling check")
+         return
+      end if
+
+      call get_charges(model_eeqbc, mol_het_shift, error, q_het_shift)
+      if (allocated(error)) return
+      deallocate(model_eeqbc)
+      call new_eeqbc2025_model(mol_het_rev, model_eeqbc, error)
+      if (allocated(error)) return
+      call get_charges(model_eeqbc, mol_het_rev, error, q_het_rev)
+      if (allocated(error)) return
+      if (maxval(abs(q_het_shift - q_het)) > 1.0e-13_wp &
+         & .or. maxval(abs(q_het_rev(1:4) - q_het(4:7))) > 1.0e-13_wp &
+         & .or. maxval(abs(q_het_rev(5:7) - q_het(1:3))) > 1.0e-13_wp) then
+         call test_failed(error, "EEQBC asymptotic charges not invariant to shift or fragment reordering")
+         return
+      end if
+
+      ! 5. Charged fragment combination (H2O...NH4+, Q = +1) at R = 60 Bohr vs 1000 A:
+      !    Verify exact off-diagonal block decoupling (A_AB = 0, C_AB = 0), distance
+      !    independence beyond cutoff, charge conservation, and zero rigid-shift response
+      xyz_chg(:, 1:3) = xyz_h2o
+      xyz_chg(1:2, 4:8) = xyz_nh4(1:2, :)
+      xyz_chg(3, 4:8) = xyz_nh4(3, :) + z_seps(3)
+      if (idim == 0) then
+         call new(mol_chg, [8, 1, 1, 7, 1, 1, 1, 1], xyz_chg, charge=1.0_wp)
+      else
+         call new(mol_chg, [8, 1, 1, 7, 1, 1, 1, 1], xyz_chg, charge=1.0_wp, &
+            & lattice=lat, periodic=pmask)
+      end if
+      deallocate(model_eeqbc)
+      call new_eeqbc2025_model(mol_chg, model_eeqbc, error)
+      if (allocated(error)) return
+      call get_charges(model_eeqbc, mol_chg, error, q_chg_ref, cache=cache_eeqbc)
+      if (allocated(error)) return
+      lam_nh4 = cache_eeqbc%qvec(9)
+
+      xyz_chg(3, 4:8) = xyz_nh4(3, :) + z_seps(5)
+      if (idim == 0) then
+         call new(mol_chg, [8, 1, 1, 7, 1, 1, 1, 1], xyz_chg, charge=1.0_wp)
+      else
+         call new(mol_chg, [8, 1, 1, 7, 1, 1, 1, 1], xyz_chg, charge=1.0_wp, &
+            & lattice=lat, periodic=pmask)
+      end if
+      call get_charges(model_eeqbc, mol_chg, error, q_chg, dqdr_chg, dqdL_chg, &
+         & cache=cache_eeqbc)
+      if (allocated(error)) return
+      call model_eeqbc%get_coulomb_matrix(mol_chg, cache_eeqbc, amat_chg)
+      lam_comb = cache_eeqbc%qvec(9)
+      if (abs(sum(q_chg) - 1.0_wp) > 1.0e-13_wp &
+         & .or. maxval(abs(amat_chg(1:3, 4:8))) > 1.0e-14_wp &
+         & .or. maxval(abs(q_chg - q_chg_ref)) > 1.0e-13_wp &
+         & .or. abs(lam_comb - lam_nh4) > 1.0e-13_wp &
+         & .or. maxval(abs(sum(dqdr_chg(:, 1:3, :), dim=2))) > 1.0e-13_wp &
+         & .or. maxval(abs(sum(dqdr_chg(:, 4:8, :), dim=2))) > 1.0e-13_wp) then
+         call test_failed(error, "Charged H2O...NH4+ complex at 1000 A failed decoupling check")
          return
       end if
    end do

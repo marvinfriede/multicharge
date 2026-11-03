@@ -21,6 +21,18 @@
 !> Thomas Froitzheim, Marcel Müller, Andreas Hansen, and Stefan Grimme,
 !> *J. Chem. Phys.*, **2025**, 162, 214109.
 !> DOI: [10.1063/5.0268978](https://dx.doi.org/10.1063/5.0268978)
+!>
+!> Note on asymptotic fragment dissociation (DFT-D4 issue #358):
+!> At large inter-fragment separation R >> cutoff, the off-diagonal bond-capacitance
+!> and Coulomb couplings between fragments A and B vanish exponentially, so A_ij and
+!> C_ij become strictly block-diagonal (A_AB = 0, C_AB = 0) and all inter-fragment
+!> spatial derivatives dq/dr and d^2q/dr^2 vanish identically. Because the published
+!> EEQBC linear system enforces a single global total-charge conservation constraint
+!> sum_{i in A union B} q_i = Q_tot with one shared Lagrange multiplier lambda,
+!> decoupled fragments with unequal isolated chemical potentials (lambda_A^iso /= lambda_B^iso)
+!> equilibrate to lambda = (w_A * lambda_A^iso + w_B * lambda_B^iso - Delta Q) / (w_A + w_B)
+!> with w_F = 1_F^T (A_F^iso)^(-1) 1_F, whereas identical neutral fragments
+!> (lambda_A^iso = lambda_B^iso) exhibit strictly zero asymptotic charge transfer.
 module multicharge_model_eeqbc
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_cutoff, only: get_lattice_points, wrap_to_central_cell
@@ -283,11 +295,19 @@ subroutine update(self, mol, cache, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL)
    end if
 
    ! Allocate (for get_xvec and xvec_derivs)
+   if (allocated(ptr%xtmp)) then
+      if (size(ptr%xtmp) /= mol%nat + 1) deallocate(ptr%xtmp)
+   end if
    if (.not. allocated(ptr%xtmp)) then
       allocate(ptr%xtmp(mol%nat + 1))
    end if
 
    ! Allocate cmat
+   if (allocated(ptr%cmat)) then
+      if (size(ptr%cmat, 1) /= mol%nat + 1 .or. size(ptr%cmat, 2) /= mol%nat + 1) then
+         deallocate(ptr%cmat)
+      end if
+   end if
    if (.not. allocated(ptr%cmat)) then
       allocate(ptr%cmat(mol%nat + 1, mol%nat + 1))
    end if
@@ -303,8 +323,16 @@ subroutine update(self, mol, cache, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL)
       if (allocated(cache%error)) return
 
       if (grad) then
+         if (allocated(ptr%dcdr)) then
+            if (size(ptr%dcdr, 2) /= mol%nat .or. size(ptr%dcdr, 3) /= mol%nat + 1) then
+               deallocate(ptr%dcdr)
+            end if
+         end if
          if (.not. allocated(ptr%dcdr)) then
             allocate(ptr%dcdr(3, mol%nat, mol%nat + 1))
+         end if
+         if (allocated(ptr%dcdL)) then
+            if (size(ptr%dcdL, 3) /= mol%nat + 1) deallocate(ptr%dcdL)
          end if
          if (.not. allocated(ptr%dcdL)) then
             allocate(ptr%dcdL(3, 3, mol%nat + 1))
@@ -317,8 +345,16 @@ subroutine update(self, mol, cache, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL)
 
       ! cmat gradients
       if (grad) then
+         if (allocated(ptr%dcdr)) then
+            if (size(ptr%dcdr, 2) /= mol%nat .or. size(ptr%dcdr, 3) /= mol%nat + 1) then
+               deallocate(ptr%dcdr)
+            end if
+         end if
          if (.not. allocated(ptr%dcdr)) then
             allocate(ptr%dcdr(3, mol%nat, mol%nat + 1))
+         end if
+         if (allocated(ptr%dcdL)) then
+            if (size(ptr%dcdL, 3) /= mol%nat + 1) deallocate(ptr%dcdL)
          end if
          if (.not. allocated(ptr%dcdL)) then
             allocate(ptr%dcdL(3, 3, mol%nat + 1))
