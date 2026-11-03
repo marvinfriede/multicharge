@@ -302,7 +302,7 @@ subroutine update(self, mol, cache, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL)
       allocate(ptr%xtmp(mol%nat + 1))
    end if
 
-   ! Allocate cmat
+   ! Allocate cmat and its derivatives
    if (allocated(ptr%cmat)) then
       if (size(ptr%cmat, 1) /= mol%nat + 1 .or. size(ptr%cmat, 2) /= mol%nat + 1) then
          deallocate(ptr%cmat)
@@ -312,8 +312,26 @@ subroutine update(self, mol, cache, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL)
       allocate(ptr%cmat(mol%nat + 1, mol%nat + 1))
    end if
 
+   if (grad) then
+      if (allocated(ptr%dcdr)) then
+         if (size(ptr%dcdr, 2) /= mol%nat .or. size(ptr%dcdr, 3) /= mol%nat + 1) then
+            deallocate(ptr%dcdr)
+         end if
+      end if
+      if (.not. allocated(ptr%dcdr)) then
+         allocate(ptr%dcdr(3, mol%nat, mol%nat + 1))
+      end if
+      if (allocated(ptr%dcdL)) then
+         if (size(ptr%dcdL, 3) /= mol%nat + 1) deallocate(ptr%dcdL)
+      end if
+      if (.not. allocated(ptr%dcdL)) then
+         allocate(ptr%dcdL(3, 3, mol%nat + 1))
+      end if
+   end if
+
    select case (count(mol%periodic))
    case (1, 2, 3)
+
       ! Create WSC in periodic subspace
       call new_wignerseitz_cell(ptr%wsc, mol, cache%error)
       if (allocated(cache%error)) return
@@ -323,20 +341,6 @@ subroutine update(self, mol, cache, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL)
       if (allocated(cache%error)) return
 
       if (grad) then
-         if (allocated(ptr%dcdr)) then
-            if (size(ptr%dcdr, 2) /= mol%nat .or. size(ptr%dcdr, 3) /= mol%nat + 1) then
-               deallocate(ptr%dcdr)
-            end if
-         end if
-         if (.not. allocated(ptr%dcdr)) then
-            allocate(ptr%dcdr(3, mol%nat, mol%nat + 1))
-         end if
-         if (allocated(ptr%dcdL)) then
-            if (size(ptr%dcdL, 3) /= mol%nat + 1) deallocate(ptr%dcdL)
-         end if
-         if (.not. allocated(ptr%dcdL)) then
-            allocate(ptr%dcdL(3, 3, mol%nat + 1))
-         end if
          call self%get_dcmat_pbc(mol, ptr%wsc, ptr%dcdr, ptr%dcdL, cache%error)
          if (allocated(cache%error)) return
       end if
@@ -345,20 +349,6 @@ subroutine update(self, mol, cache, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL)
 
       ! cmat gradients
       if (grad) then
-         if (allocated(ptr%dcdr)) then
-            if (size(ptr%dcdr, 2) /= mol%nat .or. size(ptr%dcdr, 3) /= mol%nat + 1) then
-               deallocate(ptr%dcdr)
-            end if
-         end if
-         if (.not. allocated(ptr%dcdr)) then
-            allocate(ptr%dcdr(3, mol%nat, mol%nat + 1))
-         end if
-         if (allocated(ptr%dcdL)) then
-            if (size(ptr%dcdL, 3) /= mol%nat + 1) deallocate(ptr%dcdL)
-         end if
-         if (.not. allocated(ptr%dcdL)) then
-            allocate(ptr%dcdL(3, 3, mol%nat + 1))
-         end if
          call self%get_dcmat_0d(mol, ptr%dcdr, ptr%dcdL)
       end if
    end select
@@ -544,7 +534,7 @@ subroutine get_xvec_derivs(self, mol, cache, dxdr, dxdL)
    case default
       !$omp parallel default(none) &
       !$omp shared(mol, self, ptr, dxdr, dxdL) &
-      !$omp private(iat, izp, jat, jzp, vec, dxdr_local, dxdL_local)
+      !$omp private(iat, jat, vec, dxdr_local, dxdL_local)
       allocate(dxdr_local, mold=dxdr)
       allocate(dxdL_local, mold=dxdL)
       dxdr_local(:, :, :) = 0.0_wp
@@ -814,7 +804,7 @@ subroutine get_amat_pbc(self, mol, wsc, cn, qloc, cmat, amat, error)
    type(error_type), allocatable, intent(out), optional :: error
 
    integer :: iat, jat, izp, jzp, img
-   real(wp) :: vec(3), r1, gam, dtmp, ctmp, capi, capj, radi, radj, norm_cn, rvdw, wsw
+   real(wp) :: vec(3), gam, dtmp, capi, capj, radi, radj, norm_cn, rvdw, wsw
    real(wp), allocatable :: dtrans(:, :)
 
    ! Thread-private array for reduction
@@ -828,8 +818,8 @@ subroutine get_amat_pbc(self, mol, wsc, cn, qloc, cmat, amat, error)
 
    !$omp parallel default(none) &
    !$omp shared(amat, cmat, mol, cn, qloc, self, wsc, dtrans)  &
-   !$omp private(iat, izp, jat, jzp, gam, vec, dtmp, ctmp, norm_cn) &
-   !$omp private(radi, radj, capi, capj, rvdw, r1, wsw, amat_local)
+   !$omp private(iat, izp, jat, jzp, gam, vec, dtmp, norm_cn) &
+   !$omp private(radi, radj, capi, capj, rvdw, wsw, amat_local)
    allocate(amat_local, source=amat)
    !$omp do schedule(runtime)
    do iat = 1, mol%nat
@@ -1477,7 +1467,7 @@ subroutine get_dcmat_0d(self, mol, dcdr, dcdL)
    real(wp), intent(out) :: dcdL(:, :, :)
 
    integer :: iat, jat, izp, jzp
-   real(wp) :: vec(3), r2, rvdw, dtmp, arg, dG(3), dS(3, 3), capi, capj
+   real(wp) :: vec(3), rvdw, dG(3), dS(3, 3), capi, capj
 
    ! Thread-private arrays for reduction
    real(wp), allocatable :: dcdr_local(:, :, :), dcdL_local(:, :, :)
@@ -1487,8 +1477,8 @@ subroutine get_dcmat_0d(self, mol, dcdr, dcdL)
 
    !$omp parallel default(none) &
    !$omp shared(dcdr, dcdL, mol, self) &
-   !$omp private(iat, izp, jat, jzp, r2, vec, rvdw) &
-   !$omp private(dG, dS, dtmp, arg, capi, capj) &
+   !$omp private(iat, izp, jat, jzp, vec, rvdw) &
+   !$omp private(dG, dS, capi, capj) &
    !$omp private(dcdr_local, dcdL_local)
    allocate(dcdr_local, source=dcdr)
    allocate(dcdL_local, source=dcdL)
@@ -1533,7 +1523,7 @@ subroutine get_dcmat_3d(self, mol, wsc, dcdr, dcdL, error)
    type(error_type), allocatable, intent(out), optional :: error
 
    integer :: iat, jat, izp, jzp, img
-   real(wp) :: vec(3), r2, rvdw, dtmp, arg, dG(3), dS(3, 3), capi, capj, wsw
+   real(wp) :: vec(3), rvdw, dG(3), dS(3, 3), capi, capj, wsw
    real(wp), allocatable :: dtrans(:, :)
 
    ! Thread-private arrays for reduction
@@ -1548,8 +1538,8 @@ subroutine get_dcmat_3d(self, mol, wsc, dcdr, dcdL, error)
 
    !$omp parallel default(none) &
    !$omp shared(dcdr, dcdL, mol, self, dtrans, wsc) &
-   !$omp private(iat, izp, jat, jzp, r2, vec, rvdw) &
-   !$omp private(dG, dS, dtmp, arg, capi, capj, wsw) &
+   !$omp private(iat, izp, jat, jzp, vec, rvdw) &
+   !$omp private(dG, dS, capi, capj, wsw) &
    !$omp private(dcdr_local, dcdL_local)
    allocate(dcdr_local, source=dcdr)
    allocate(dcdL_local, source=dcdL)
@@ -1605,7 +1595,7 @@ subroutine get_dcpair_dir(kbc, rij, trans, rvdw, capi, capj, dgpair, dspair)
    real(wp), intent(out) :: dspair(3, 3)
 
    integer :: itr
-   real(wp) :: r1, arg, dtmp, dgtmp(3), dstmp(3, 3), vec(3)
+   real(wp) :: r1, dgtmp(3), dstmp(3, 3), vec(3)
 
    dgpair(:) = 0.0_wp
    dspair(:, :) = 0.0_wp

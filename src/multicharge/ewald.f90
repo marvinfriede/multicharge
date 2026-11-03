@@ -202,14 +202,6 @@ subroutine get_ewald_dir_trans_3d(lattice, alpha, gam_min, trans, max_rij, &
          return
       end if
       rep_i8(k) = max(2_i8, ceiling(r_dir * norm2(inv_lat(:, k)), kind=i8))
-      if (rep_i8(k) > limit_i8) then
-         if (present(error)) then
-            call fatal_error(error, &
-               & "3D Ewald direct-space summation exceeds maximum translation limit")
-         end if
-         allocate(trans(3, 0))
-         return
-      end if
       ntr_i8 = ntr_i8 * (2_i8 * rep_i8(k) + 1_i8)
       if (ntr_i8 > limit_i8) then
          if (present(error)) then
@@ -276,14 +268,6 @@ subroutine get_ewald_rec_trans_3d(lattice, alpha, trans, tol, max_trans, error)
          return
       end if
       rep_i8(k) = max(2_i8, ceiling(gcut * norm2(red_lat(:, k)) / twopi, kind=i8))
-      if (rep_i8(k) > limit_i8) then
-         if (present(error)) then
-            call fatal_error(error, &
-               & "3D Ewald reciprocal-space summation exceeds maximum translation limit")
-         end if
-         allocate(trans(3, 0))
-         return
-      end if
       ntr_i8 = ntr_i8 * (2_i8 * rep_i8(k) + 1_i8)
       if (ntr_i8 - 1_i8 > limit_i8) then
          if (present(error)) then
@@ -338,7 +322,12 @@ pure subroutine canonicalize_vec_sign(v)
 end subroutine canonicalize_vec_sign
 
 
-!> Reduce a 2D periodic lattice basis to its shortest Lagrange-Gauss basis
+!> Reduce a 2D periodic lattice basis to its shortest Lagrange-Gauss basis.
+!>
+!> Unlike Wigner-Seitz cell construction in mctc-lib (which tracks the unimodular
+!> integer matrix U in GL(2, Z) to map reduced integer coordinates back to the
+!> caller's original lattice vectors), 2D Ewald summation evaluates direct- and
+!> reciprocal-space sums directly on the reduced basis (u1, u2) with canonical signs.
 pure subroutine reduce_basis_2d(a1, a2, u1, u2)
    !> First periodic lattice vector
    real(wp), intent(in) :: a1(3)
@@ -349,7 +338,8 @@ pure subroutine reduce_basis_2d(a1, a2, u1, u2)
    !> Second reduced basis vector
    real(wp), intent(out) :: u2(3)
 
-   real(wp) :: tmp(3), n1, n2, mu, dot12
+   real(wp), parameter :: tol_mu = 0.5_wp * (1.0_wp + 1.0e-12_wp)
+   real(wp) :: tmp(3), n1, n2, mu_proj, mu, dot12
    integer :: iter
 
    u1 = a1
@@ -364,8 +354,9 @@ pure subroutine reduce_basis_2d(a1, a2, u1, u2)
          n1 = n2
       end if
       if (n1 <= tiny(1.0_wp)) exit
-      mu = anint(dot_product(u1, u2) / n1)
-      if (abs(mu) < 0.5_wp) exit
+      mu_proj = dot_product(u1, u2) / n1
+      if (abs(mu_proj) <= tol_mu) exit
+      mu = anint(mu_proj)
       u2 = u2 - mu * u1
    end do
    call canonicalize_vec_sign(u1)
@@ -380,7 +371,11 @@ pure subroutine reduce_basis_2d(a1, a2, u1, u2)
 end subroutine reduce_basis_2d
 
 
-!> Reduce a 3D periodic lattice basis using LLL basis reduction
+!> Reduce a 3D periodic lattice basis using LLL basis reduction.
+!>
+!> Unlike mctc-lib Wigner-Seitz bound estimation (which tracks U in GL(3, Z) to
+!> transform integer coordinates back to the unreduced lattice), 3D Ewald summation
+!> enumerates direct and reciprocal lattice vectors directly from the reduced basis.
 pure subroutine reduce_basis_3d(lattice, red_lat)
    !> Input 3D lattice basis (3, 3)
    real(wp), intent(in) :: lattice(:, :)
@@ -553,15 +548,6 @@ subroutine get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, trans, max_rij, &
 
    rep1_i8 = max(2_i8, ceiling(r_dir * len2 / area, kind=i8))
    rep2_i8 = max(2_i8, ceiling(r_dir * len1 / area, kind=i8))
-   if (rep1_i8 > limit_i8 .or. rep2_i8 > limit_i8) then
-      if (present(error)) then
-         call fatal_error(error, &
-            & "2D Ewald direct-space summation exceeds maximum translation limit")
-      end if
-      allocate(trans(3, 0))
-      return
-   end if
-
    ntr_i8 = (2_i8 * rep1_i8 + 1_i8) * (2_i8 * rep2_i8 + 1_i8)
    if (ntr_i8 > limit_i8) then
       if (present(error)) then
@@ -649,15 +635,6 @@ subroutine get_ewald_rec_trans_2d(a1, a2, alpha, trans, area, n_hat, &
 
    rep1_i8 = max(2_i8, ceiling(gcut * sqrt(g22) / rec_area, kind=i8))
    rep2_i8 = max(2_i8, ceiling(gcut * sqrt(g11) / rec_area, kind=i8))
-   if (rep1_i8 > limit_i8 .or. rep2_i8 > limit_i8) then
-      if (present(error)) then
-         call fatal_error(error, &
-            & "2D Ewald reciprocal-space summation exceeds maximum translation limit")
-      end if
-      allocate(trans(3, 0))
-      return
-   end if
-
    ntr_i8 = (2_i8 * rep1_i8 + 1_i8) * (2_i8 * rep2_i8 + 1_i8) - 1_i8
    if (ntr_i8 > limit_i8) then
       if (present(error)) then

@@ -477,7 +477,7 @@ subroutine add_periodic_hessian_1d(self, mol, wsc, alpha, qvec, adj, hessian, di
    real(wp), intent(inout) :: hessian(:, :), diagonal(:, :, :)
    type(error_type), allocatable, intent(out), optional :: error
 
-   integer :: iat, jat, izp, jzp, img, itr, ipair, npair, idir
+   integer :: iat, jat, izp, jzp, img, itr, ipair, npair, ndim, p_axes(3)
    real(wp) :: gam, gam_min, max_rij, wsw, rij(3), vec(3), r, weight, box(3, 3)
    real(wp) :: val_g, dr_g, drr_g, val_a, dr_a, drr_a
    real(wp) :: a1(3), len1, u_hat(3), r_perp(3), rho2, alp2, x, y
@@ -488,12 +488,8 @@ subroutine add_periodic_hessian_1d(self, mol, wsc, alpha, qvec, adj, hessian, di
       & [1, 0, 0, 0, 1, 0, 0, 0, 1], [3, 3])
    real(wp), allocatable :: dtrans(:, :), rtrans(:, :)
 
-   do idir = 1, 3
-      if (mol%periodic(idir)) then
-         a1 = mol%lattice(:, idir)
-         exit
-      end if
-   end do
+   call get_periodic_axes(mol%periodic, ndim, p_axes)
+   a1 = mol%lattice(:, p_axes(1))
    gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
    max_rij = get_max_wsc_disp(mol, wsc)
    call get_ewald_dir_trans_1d(a1, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
@@ -829,18 +825,14 @@ subroutine get_amat_1d(self, mol, wsc, alpha, amat, error)
    real(wp), intent(out) :: amat(:, :)
    type(error_type), allocatable, intent(out), optional :: error
 
-   integer :: iat, jat, izp, jzp, img, ipair, npair, idir
+   integer :: iat, jat, izp, jzp, img, ipair, npair, ndim, p_axes(3)
    real(wp) :: vec(3), gam, gam_min, max_rij, wsw, dtmp, rtmp, tmp
    real(wp) :: a1(3), len1, u_hat(3)
    real(wp), allocatable :: dtrans(:, :), rtrans(:, :)
 
    amat = 0.0_wp
-   do idir = 1, 3
-      if (mol%periodic(idir)) then
-         a1 = mol%lattice(:, idir)
-         exit
-      end if
-   end do
+   call get_periodic_axes(mol%periodic, ndim, p_axes)
+   a1 = mol%lattice(:, p_axes(1))
    gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
    max_rij = get_max_wsc_disp(mol, wsc)
    call get_ewald_dir_trans_1d(a1, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
@@ -950,6 +942,7 @@ subroutine get_damat_0d(self, mol, qvec, dadr, dadL, atrace)
    atrace(:, :) = 0.0_wp
    dadL(:, :, :) = 0.0_wp
    npair = mol%nat*(mol%nat+1)/2
+
    ! Pair derivatives have unique owners. Only atom-wise traces and strain
    ! derivatives need reduction, with O(N) storage per thread.
    !$omp parallel default(none) shared(dadr, mol, self, qvec, npair) &
@@ -1131,7 +1124,7 @@ subroutine get_damat_2d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace, error)
    real(wp), intent(out) :: dadr(:, :, :), dadL(:, :, :), atrace(:, :)
    type(error_type), allocatable, intent(out), optional :: error
 
-   integer :: iat, jat, izp, jzp, img, ipair, npair, idir, ip
+   integer :: iat, jat, izp, jzp, img, ipair, npair, ndim, p_axes(3)
    real(wp) :: gam, gam_min, max_rij, wsw, vec(3), dG(3), dS(3, 3)
    real(wp) :: dGd(3), dSd(3, 3), dGr(3), dSr(3, 3)
    real(wp) :: a1(3), a2(3), area, n_hat(3)
@@ -1140,14 +1133,9 @@ subroutine get_damat_2d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace, error)
    atrace(:, :) = 0.0_wp
    dadL(:, :, :) = 0.0_wp
    dadr(:, :, :) = 0.0_wp
-   ip = 0
-   do idir = 1, 3
-      if (mol%periodic(idir)) then
-         ip = ip + 1
-         if (ip == 1) a1 = mol%lattice(:, idir)
-         if (ip == 2) a2 = mol%lattice(:, idir)
-      end if
-   end do
+   call get_periodic_axes(mol%periodic, ndim, p_axes)
+   a1 = mol%lattice(:, p_axes(1))
+   a2 = mol%lattice(:, p_axes(2))
    gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
    max_rij = get_max_wsc_disp(mol, wsc)
    call get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
@@ -1264,7 +1252,7 @@ subroutine get_damat_1d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace, error)
    real(wp), intent(out) :: dadr(:, :, :), dadL(:, :, :), atrace(:, :)
    type(error_type), allocatable, intent(out), optional :: error
 
-   integer :: iat, jat, izp, jzp, img, ipair, npair, idir
+   integer :: iat, jat, izp, jzp, img, ipair, npair, ndim, p_axes(3)
    real(wp) :: gam, gam_min, max_rij, wsw, vec(3), dG(3), dS(3, 3)
    real(wp) :: dGd(3), dSd(3, 3), dGr(3), dSr(3, 3)
    real(wp) :: a1(3), len1, u_hat(3)
@@ -1273,12 +1261,8 @@ subroutine get_damat_1d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace, error)
    atrace(:, :) = 0.0_wp
    dadL(:, :, :) = 0.0_wp
    dadr(:, :, :) = 0.0_wp
-   do idir = 1, 3
-      if (mol%periodic(idir)) then
-         a1 = mol%lattice(:, idir)
-         exit
-      end if
-   end do
+   call get_periodic_axes(mol%periodic, ndim, p_axes)
+   a1 = mol%lattice(:, p_axes(1))
    gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
    max_rij = get_max_wsc_disp(mol, wsc)
    call get_ewald_dir_trans_1d(a1, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
