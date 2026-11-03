@@ -22,6 +22,7 @@
 !> *J. Chem. Phys.*, **2025**, 162, 214109.
 !> DOI: [10.1063/5.0268978](https://dx.doi.org/10.1063/5.0268978)
 module multicharge_model_eeqbc
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_cutoff, only: get_lattice_points, wrap_to_central_cell
    use mctc_env, only: error_type, fatal_error, wp
    use mctc_io, only: structure_type
@@ -91,6 +92,8 @@ module multicharge_model_eeqbc
       procedure :: get_dcmat_pbc => get_dcmat_3d
       !> Calculate constraint matrix derivatives (periodic, legacy alias)
       procedure :: get_dcmat_3d
+      !> Validate EEQBC model parameter initialization and extents
+      procedure :: check_model => check_eeqbc_model
       !> Whether the charge model supports charged 1D/2D periodic unit cells
       procedure :: supports_charged_lowd
    end type eeqbc_model
@@ -116,6 +119,54 @@ pure function supports_charged_lowd(self) result(supported)
 
    supported = .true.
 end function supports_charged_lowd
+
+!> Validate EEQBC model parameter initialization and extents for a structure
+subroutine check_eeqbc_model(self, mol, error)
+   !> Bond capacitor electronegativity equilibration model
+   class(eeqbc_model), intent(in) :: self
+   !> Molecular structure data
+   type(structure_type), intent(in) :: mol
+   !> Error handling
+   type(error_type), allocatable, intent(out) :: error
+
+   integer :: nid
+
+   nid = maxval(mol%id(:mol%nat))
+   if (.not. allocated(self%kqchi) .or. .not. allocated(self%kqeta) &
+      & .or. .not. allocated(self%kcnrad) .or. .not. allocated(self%cap) &
+      & .or. .not. allocated(self%avg_cn) .or. .not. allocated(self%rvdw) &
+      & .or. .not. allocated(self%ncoord_en)) then
+      call fatal_error(error, "EEQBC model parameters are not initialized")
+      return
+   end if
+
+   if (size(self%kqchi) < nid .or. size(self%kqeta) < nid &
+      & .or. size(self%cap) < nid .or. size(self%avg_cn) < nid) then
+      call fatal_error(error, "EEQBC model parameter arrays have insufficient size")
+      return
+   end if
+
+   if (size(self%rvdw, 1) < mol%nat .or. size(self%rvdw, 2) < mol%nat) then
+      call fatal_error(error, "EEQBC van der Waals radius matrix has insufficient size")
+      return
+   end if
+
+   if (.not. all(ieee_is_finite(self%kqchi(:nid))) &
+      & .or. .not. all(ieee_is_finite(self%kqeta(:nid))) &
+      & .or. .not. ieee_is_finite(self%kcnrad) &
+      & .or. .not. all(ieee_is_finite(self%cap(:nid))) &
+      & .or. .not. all(ieee_is_finite(self%avg_cn(:nid))) &
+      & .or. .not. all(ieee_is_finite(self%rvdw(:mol%nat, :mol%nat)))) then
+      call fatal_error(error, "EEQBC model parameters contain non-finite values")
+      return
+   end if
+
+   if (any(self%avg_cn(:nid) <= 0.0_wp) .or. any(self%cap(:nid) < 0.0_wp) &
+      & .or. any(self%rvdw(:mol%nat, :mol%nat) <= 0.0_wp)) then
+      call fatal_error(error, "EEQBC model parameters are out of valid domain")
+      return
+   end if
+end subroutine check_eeqbc_model
 
 subroutine new_eeqbc_model(self, mol, error, chi, rad, &
    & eta, kcnchi, kqchi, kqeta, kcnrad, cap, avg_cn, rvdw, &
@@ -519,6 +570,20 @@ subroutine add_model_hessian(self, mol, error, cache, adj, hessian)
    if (.not. associated(ptr)) then
       call fatal_error(error, "Incompatible EEQBC response cache")
       return
+   end if
+
+   if (.not. allocated(ptr%cn) .or. .not. allocated(ptr%qloc) &
+      & .or. .not. allocated(ptr%dcndr) .or. .not. allocated(ptr%dqlocdr)) then
+      call fatal_error(error, "Incomplete EEQBC response cache for charge Hessian")
+      return
+   end if
+
+   if (any(mol%periodic)) then
+      if (.not. allocated(ptr%wsc%nimg) .or. .not. allocated(ptr%wsc%tridx) &
+         & .or. .not. allocated(ptr%wsc%trans)) then
+         call fatal_error(error, "EEQBC response cache is missing periodic Wigner-Seitz cell")
+         return
+      end if
    end if
    nat = mol%nat
    mol_wrapped = mol

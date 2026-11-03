@@ -27,7 +27,7 @@ module test_pbc
       & fast_f012_1d, fast_k012_1d, erfc_exp_2d
    use multicharge_model, only: mchrg_model_type
    use multicharge_model_cache, only: cache_container
-   use multicharge_model_eeq, only: eeq_cache
+   use multicharge_model_eeq, only: eeq_model, eeq_cache
    use multicharge_model_eeqbc, only: eeqbc_model, eeqbc_cache
    use multicharge_param, only: new_eeq2019_model, new_eeqbc2025_model
    implicit none
@@ -76,7 +76,9 @@ subroutine collect_pbc(testsuite)
       & new_unittest("eeqbc-water-helium-358", test_eeqbc_water_helium_358), &
       & new_unittest("eeq-3d-slab-285", test_eeq_3d_slab_285), &
       & new_unittest("special-functions-1d-2d", test_special_functions_1d_2d), &
-      & new_unittest("degenerate-lattice-error", test_degenerate_lattice_error) &
+      & new_unittest("degenerate-lattice-error", test_degenerate_lattice_error), &
+      & new_unittest("structure-and-contract-validation", test_structure_and_contract_validation), &
+      & new_unittest("charged-lowd-contracts", test_charged_lowd_contracts) &
       & ]
 
 end subroutine collect_pbc
@@ -2016,6 +2018,72 @@ subroutine test_pbc_wsc_invariance_1d_2d(error)
       return
    end if
 
+   ! 6. 3D skewed-cell counterexample (a1=(5,0,0), a2=(25,1,0), a3=(0,0,5), r2=0.5*a2)
+   !    vs LLL-reduced basis (a1'=(5,0,0), a2'=(0,1,0), a3'=(0,0,5), r2'=r2-2*a1=(2.5,0.5,0))
+   !    across get_charges, add_charge_hessian, model%solve, and model%add_charge_hessian
+   lat_ref = reshape([ &
+      & 5.0_wp, 0.0_wp, 0.0_wp, &
+      & 0.0_wp, 1.0_wp, 0.0_wp, &
+      & 0.0_wp, 0.0_wp, 5.0_wp], [3, 3])
+   lat_test = reshape([ &
+      &  5.0_wp, 0.0_wp, 0.0_wp, &
+      & 25.0_wp, 1.0_wp, 0.0_wp, &
+      &  0.0_wp, 0.0_wp, 5.0_wp], [3, 3])
+   call new(mol_0, [6, 8], reshape([ &
+      & 0.0_wp, 0.0_wp, 0.0_wp, &
+      & 2.5_wp, 0.5_wp, 0.0_wp], [3, 2]), charge=0.0_wp, &
+      & lattice=lat_ref, periodic=[.true., .true., .true.])
+   call new(mol_p, [6, 8], reshape([ &
+      &  0.0_wp, 0.0_wp, 0.0_wp, &
+      & 12.5_wp, 0.5_wp, 0.0_wp], [3, 2]), charge=0.0_wp, &
+      & lattice=lat_test, periodic=[.true., .true., .true.])
+
+   deallocate(model)
+   call new_eeq2019_model(mol_0, model, error)
+   if (allocated(error)) return
+   call get_charges(model, mol_0, error, q_0, dqdr_0, dqdL_0, cache=cache)
+   if (allocated(error)) return
+   hess_0 = 0.0_wp
+   call add_charge_hessian(model, mol_0, error, weights2, hess_0, cache)
+   if (allocated(error)) return
+
+   call get_charges(model, mol_p, error, q_p, dqdr_p, dqdL_p, cache=cache)
+   if (allocated(error)) return
+   hess_p = 0.0_wp
+   call model%add_charge_hessian(mol_p, error, weights2, hess_p, cache)
+   if (allocated(error)) return
+
+   if (maxval(abs(q_p - q_0)) > 1.0e-11_wp &
+      & .or. maxval(abs(dqdr_p - dqdr_0)) > 1.0e-10_wp &
+      & .or. maxval(abs(dqdL_p - dqdL_0)) > 1.0e-10_wp &
+      & .or. maxval(abs(hess_p - hess_0)) > 1.0e-9_wp) then
+      call test_failed(error, "3D skewed-cell counterexample failed for EEQ")
+      return
+   end if
+
+   deallocate(model)
+   call new_eeqbc2025_model(mol_0, model, error)
+   if (allocated(error)) return
+   call get_charges(model, mol_0, error, q_0, dqdr_0, dqdL_0, cache=cache)
+   if (allocated(error)) return
+   hess_0 = 0.0_wp
+   call add_charge_hessian(model, mol_0, error, weights2, hess_0, cache)
+   if (allocated(error)) return
+
+   call get_charges(model, mol_p, error, q_p, dqdr_p, dqdL_p, cache=cache)
+   if (allocated(error)) return
+   hess_p = 0.0_wp
+   call model%add_charge_hessian(mol_p, error, weights2, hess_p, cache)
+   if (allocated(error)) return
+
+   if (maxval(abs(q_p - q_0)) > 1.0e-11_wp &
+      & .or. maxval(abs(dqdr_p - dqdr_0)) > 1.0e-10_wp &
+      & .or. maxval(abs(dqdL_p - dqdL_0)) > 1.0e-10_wp &
+      & .or. maxval(abs(hess_p - hess_0)) > 1.0e-9_wp) then
+      call test_failed(error, "3D skewed-cell counterexample failed for EEQBC")
+      return
+   end if
+
 end subroutine test_pbc_wsc_invariance_1d_2d
 
 !> Verify 1D and 2D EEQBC direct-lattice summation convergence across screening
@@ -2534,5 +2602,264 @@ subroutine test_special_functions_1d_2d(error)
    end if
 
 end subroutine test_special_functions_1d_2d
+
+!> Verify structural, model, and array-shape contract validation across public and
+!> type-bound APIs without relying on logical short-circuit evaluation.
+subroutine test_structure_and_contract_validation(error)
+   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_positive_inf
+   type(error_type), allocatable, intent(out) :: error
+
+   type(structure_type) :: mol, mol_bad
+   class(mchrg_model_type), allocatable :: model
+   type(eeq_model) :: uninit_eeq
+   type(eeqbc_model) :: uninit_eeqbc
+   type(cache_container) :: empty_cache
+   type(error_type), allocatable :: expected
+   real(wp) :: qvec(2), qshort(1), cn(2), qloc(2), hess(6, 6), weights(2)
+   real(wp) :: nan_val, inf_val
+
+   nan_val = ieee_value(1.0_wp, ieee_quiet_nan)
+   inf_val = ieee_value(1.0_wp, ieee_positive_inf)
+   cn = 1.0_wp
+   qloc = 0.0_wp
+   weights = 1.0_wp
+
+   call new(mol, [8, 1], reshape([0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.8_wp], [3, 2]), &
+      & charge=0.0_wp, lattice=reshape([ &
+      & 10.0_wp, 0.0_wp, 0.0_wp, &
+      & 0.0_wp, 10.0_wp, 0.0_wp, &
+      & 0.0_wp, 0.0_wp, 10.0_wp], [3, 3]), periodic=[.true., .false., .false.])
+   call new_eeqbc2025_model(mol, model, error)
+   if (allocated(error)) return
+
+   ! 1. nat <= 0
+   mol_bad = mol
+   mol_bad%nat = 0
+   call get_charges(model, mol_bad, expected, qvec)
+   if (.not. allocated(expected)) then
+      call test_failed(error, "Failed to reject mol%nat <= 0")
+      return
+   end if
+   deallocate(expected)
+
+   ! 2. Unallocated / undersized xyz
+   mol_bad = mol
+   deallocate(mol_bad%xyz)
+   call get_charges(model, mol_bad, expected, qvec)
+   if (.not. allocated(expected)) then
+      call test_failed(error, "Failed to reject unallocated mol%xyz")
+      return
+   end if
+   deallocate(expected)
+
+   ! 3. Out-of-bounds species id
+   mol_bad = mol
+   mol_bad%id(1) = 99
+   call get_charges(model, mol_bad, expected, qvec)
+   if (.not. allocated(expected)) then
+      call test_failed(error, "Failed to reject out-of-bounds mol%id")
+      return
+   end if
+   deallocate(expected)
+
+   ! 4. Nonfinite coordinates, charge, or lattice
+   mol_bad = mol
+   mol_bad%xyz(1, 1) = nan_val
+   call get_charges(model, mol_bad, expected, qvec)
+   if (.not. allocated(expected)) then
+      call test_failed(error, "Failed to reject NaN in mol%xyz")
+      return
+   end if
+   deallocate(expected)
+
+   mol_bad = mol
+   mol_bad%charge = inf_val
+   call get_charges(model, mol_bad, expected, qvec)
+   if (.not. allocated(expected)) then
+      call test_failed(error, "Failed to reject Inf in mol%charge")
+      return
+   end if
+   deallocate(expected)
+
+   mol_bad = mol
+   mol_bad%lattice(1, 1) = nan_val
+   call get_charges(model, mol_bad, expected, qvec)
+   if (.not. allocated(expected)) then
+      call test_failed(error, "Failed to reject NaN in mol%lattice")
+      return
+   end if
+   deallocate(expected)
+
+   ! 5. Periodic structure with undersized periodic mask or unallocated lattice
+   mol_bad = mol
+   deallocate(mol_bad%periodic)
+   allocate(mol_bad%periodic(2), source=[.true., .false.])
+   call get_charges(model, mol_bad, expected, qvec)
+   if (.not. allocated(expected)) then
+      call test_failed(error, "Failed to reject periodic mask of length < 3")
+      return
+   end if
+   deallocate(expected)
+
+   mol_bad = mol
+   deallocate(mol_bad%lattice)
+   call get_charges(model, mol_bad, expected, qvec)
+   if (.not. allocated(expected)) then
+      call test_failed(error, "Failed to reject periodic structure with unallocated lattice")
+      return
+   end if
+   deallocate(expected)
+
+   ! 6. Uninitialized models and undersized output arrays
+   call uninit_eeq%solve(mol, expected, cn, qloc, qvec=qvec)
+   if (.not. allocated(expected)) then
+      call test_failed(error, "Failed to reject uninitialized eeq_model")
+      return
+   end if
+   deallocate(expected)
+
+   call uninit_eeqbc%solve(mol, expected, cn, qloc, qvec=qvec)
+   if (.not. allocated(expected)) then
+      call test_failed(error, "Failed to reject uninitialized eeqbc_model")
+      return
+   end if
+   deallocate(expected)
+
+   call get_charges(model, mol, expected, qshort)
+   if (.not. allocated(expected)) then
+      call test_failed(error, "Failed to reject undersized qvec in get_charges")
+      return
+   end if
+   deallocate(expected)
+
+   call model%solve(mol, expected, cn, qloc, qvec=qshort)
+   if (.not. allocated(expected)) then
+      call test_failed(error, "Failed to reject undersized qvec in model%solve")
+      return
+   end if
+   deallocate(expected)
+
+   ! 7. Calling model%add_charge_hessian with an empty cache must fail cleanly
+   hess = 0.0_wp
+   call model%add_charge_hessian(mol, expected, weights, hess, empty_cache)
+   if (.not. allocated(expected)) then
+      call test_failed(error, "Failed to reject empty cache in model%add_charge_hessian")
+      return
+   end if
+   deallocate(expected)
+
+end subroutine test_structure_and_contract_validation
+
+!> Verify charged 1D and 2D contracts: EEQ rejects non-neutral 1D/2D systems across
+!> all entry points, whereas EEQBC supports charged 1D/2D systems with exact charge
+!> conservation and analytical derivatives.
+subroutine test_charged_lowd_contracts(error)
+   type(error_type), allocatable, intent(out) :: error
+
+   type(structure_type) :: mol
+   class(mchrg_model_type), allocatable :: model_eeq, model_eeqbc
+   type(cache_container) :: cache
+   type(error_type), allocatable :: expected
+   real(wp) :: xyz(3, 3), lat(3, 3), qvec(3), dqdr(3, 3, 3), dqdL(3, 3, 3)
+   real(wp) :: cn(3), qloc(3), hess(9, 9), weights(3), charges(2)
+   logical :: masks(3, 6)
+   integer :: im, iq
+
+   xyz = reshape([ &
+      & 0.0_wp,  0.0_wp,  0.0_wp, &
+      & 1.4_wp,  0.6_wp, -0.3_wp, &
+      & 0.5_wp, -1.1_wp,  0.8_wp], [3, 3])
+   lat = reshape([ &
+      & 8.5_wp, 0.0_wp, 0.0_wp, &
+      & 0.4_wp, 9.0_wp, 0.0_wp, &
+      & 0.2_wp, 0.5_wp, 9.5_wp], [3, 3])
+   masks(:, 1) = [.true.,  .false., .false.]
+   masks(:, 2) = [.false., .true.,  .false.]
+   masks(:, 3) = [.false., .false., .true.]
+   masks(:, 4) = [.true.,  .true.,  .false.]
+   masks(:, 5) = [.true.,  .false., .true.]
+   masks(:, 6) = [.false., .true.,  .true.]
+   charges = [1.0_wp, -0.5_wp]
+   weights = [0.5_wp, -0.3_wp, 0.2_wp]
+   cn = 1.0_wp
+   qloc = 0.0_wp
+
+   call new(mol, [8, 1, 6], xyz, charge=0.0_wp, lattice=lat, periodic=masks(:, 1))
+   call new_eeq2019_model(mol, model_eeq, error)
+   if (allocated(error)) return
+   call new_eeqbc2025_model(mol, model_eeqbc, error)
+   if (allocated(error)) return
+
+   if (model_eeq%supports_charged_lowd()) then
+      call test_failed(error, "eeq_model%supports_charged_lowd() must be .false.")
+      return
+   end if
+   if (.not. model_eeqbc%supports_charged_lowd()) then
+      call test_failed(error, "eeqbc_model%supports_charged_lowd() must be .true.")
+      return
+   end if
+
+   do im = 1, 6
+      do iq = 1, size(charges)
+         call new(mol, [8, 1, 6], xyz, charge=charges(iq), lattice=lat, periodic=masks(:, im))
+
+         ! EEQ must reject charged 1D and 2D across get_charges, solve, and add_charge_hessian
+         call get_charges(model_eeq, mol, expected, qvec)
+         if (.not. allocated(expected)) then
+            call test_failed(error, "EEQ get_charges did not reject charged 1D/2D structure")
+            return
+         end if
+         deallocate(expected)
+
+         call model_eeq%solve(mol, expected, cn, qloc, qvec=qvec)
+         if (.not. allocated(expected)) then
+            call test_failed(error, "EEQ solve did not reject charged 1D/2D structure")
+            return
+         end if
+         deallocate(expected)
+
+         hess = 0.0_wp
+         call add_charge_hessian(model_eeq, mol, expected, weights, hess, cache)
+         if (.not. allocated(expected)) then
+            call test_failed(error, "EEQ add_charge_hessian did not reject charged 1D/2D structure")
+            return
+         end if
+         deallocate(expected)
+
+         ! EEQBC must support charged 1D and 2D and conserve total charge
+         call get_charges(model_eeqbc, mol, error, qvec, dqdr, dqdL, cache=cache)
+         if (allocated(error)) return
+         if (abs(sum(qvec) - charges(iq)) > 1.0e-12_wp) then
+            call test_failed(error, "Charged 1D/2D EEQBC did not conserve total charge")
+            return
+         end if
+         hess = 0.0_wp
+         call add_charge_hessian(model_eeqbc, mol, error, weights, hess, cache)
+         if (allocated(error)) return
+      end do
+   end do
+
+   ! Finite-difference derivative verification for charged 1D and 2D EEQBC
+   call new(mol, [8, 1, 6], xyz, charge=1.0_wp, lattice=lat, periodic=[.true., .false., .false.])
+   call test_numgrad(error, mol, model_eeqbc)
+   if (allocated(error)) return
+   call test_numsigma(error, mol, model_eeqbc)
+   if (allocated(error)) return
+   call test_numdqdr(error, mol, model_eeqbc)
+   if (allocated(error)) return
+   call test_numdqdL(error, mol, model_eeqbc)
+   if (allocated(error)) return
+
+   call new(mol, [8, 1, 6], xyz, charge=-0.5_wp, lattice=lat, periodic=[.true., .true., .false.])
+   call test_numgrad(error, mol, model_eeqbc)
+   if (allocated(error)) return
+   call test_numsigma(error, mol, model_eeqbc)
+   if (allocated(error)) return
+   call test_numdqdr(error, mol, model_eeqbc)
+   if (allocated(error)) return
+   call test_numdqdL(error, mol, model_eeqbc)
+   if (allocated(error)) return
+
+end subroutine test_charged_lowd_contracts
 
 end module test_pbc

@@ -239,6 +239,19 @@ subroutine add_model_hessian(self, mol, error, cache, adj, hessian)
       call fatal_error(error, "Incompatible EEQ response cache")
       return
    end if
+
+   if (.not. allocated(ptr%cn) .or. .not. allocated(ptr%dcndr)) then
+      call fatal_error(error, "Incomplete EEQ response cache for charge Hessian")
+      return
+   end if
+
+   if (any(mol%periodic)) then
+      if (.not. allocated(ptr%wsc%nimg) .or. .not. allocated(ptr%wsc%tridx) &
+         & .or. .not. allocated(ptr%wsc%trans)) then
+         call fatal_error(error, "EEQ response cache is missing periodic Wigner-Seitz cell")
+         return
+      end if
+   end if
    nat = mol%nat
    allocate(dEdcn(nat), work(3*nat, nat))
    dcndr = reshape(ptr%dcndr, [3*nat, nat])

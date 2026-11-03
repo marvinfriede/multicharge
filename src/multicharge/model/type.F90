@@ -70,6 +70,8 @@ module multicharge_model_type
       procedure :: local_charge
       !> Validate periodic subspace geometry and model charge constraints
       procedure :: check_structure
+      !> Validate charge model parameter initialization and extents
+      procedure :: check_model
       !> Whether the charge model supports charged 1D/2D periodic unit cells
       procedure :: supports_charged_lowd
       !> Update cache
@@ -147,6 +149,16 @@ pure function supports_charged_lowd(self) result(supported)
    supported = .false.
 end function supports_charged_lowd
 
+!> Validate subclass-specific model parameter initialization and extents for a structure
+subroutine check_model(self, mol, error)
+   !> Electronegativity equilibration model
+   class(mchrg_model_type), intent(in) :: self
+   !> Molecular structure data
+   type(structure_type), intent(in) :: mol
+   !> Error handling
+   type(error_type), allocatable, intent(out) :: error
+end subroutine check_model
+
 !> Validate periodic subspace geometry and model charge constraints for a structure
 subroutine check_structure(self, mol, error)
    !> Electronegativity equilibration model
@@ -156,24 +168,102 @@ subroutine check_structure(self, mol, error)
    !> Error handling
    type(error_type), allocatable, intent(out) :: error
 
-   integer :: ndim, p_axes(3)
+   integer :: ndim, nid, p_axes(3)
    real(wp) :: a1(3), a2(3), a3(3), len1, len2, area, vol
    real(wp), parameter :: tol_deg = 1.0e-10_wp
 
-   if (mol%nat <= 0 .or. .not. allocated(mol%xyz)) then
+   if (mol%nat <= 0) then
       call fatal_error(error, "Molecular structure contains no atoms")
       return
    end if
-   if (.not. all(ieee_is_finite(mol%xyz(:, :mol%nat)))) then
+
+   if (.not. allocated(mol%xyz)) then
+      call fatal_error(error, "Atomic coordinates are not allocated")
+      return
+   end if
+
+   if (size(mol%xyz, 1) < 3 .or. size(mol%xyz, 2) < mol%nat) then
+      call fatal_error(error, "Atomic coordinates have invalid dimensions")
+      return
+   end if
+
+   if (.not. all(ieee_is_finite(mol%xyz(:3, :mol%nat)))) then
       call fatal_error(error, "Atomic coordinates contain non-finite values")
       return
    end if
+
    if (.not. ieee_is_finite(mol%charge)) then
       call fatal_error(error, "Molecular charge contains a non-finite value")
       return
    end if
 
-   if (.not. allocated(mol%periodic)) return
+   if (.not. allocated(mol%id)) then
+      call fatal_error(error, "Atomic species identifiers are not allocated")
+      return
+   end if
+
+   if (size(mol%id) < mol%nat) then
+      call fatal_error(error, "Atomic species identifiers have invalid dimensions")
+      return
+   end if
+
+   if (minval(mol%id(:mol%nat)) < 1) then
+      call fatal_error(error, "Atomic species identifiers contain non-positive values")
+      return
+   end if
+
+   nid = maxval(mol%id(:mol%nat))
+   if (.not. allocated(self%chi) .or. .not. allocated(self%rad) &
+      & .or. .not. allocated(self%eta) .or. .not. allocated(self%kcnchi) &
+      & .or. .not. allocated(self%ncoord)) then
+      call fatal_error(error, "Charge model parameters are not initialized")
+      return
+   end if
+
+   if (size(self%chi) < nid .or. size(self%rad) < nid &
+      & .or. size(self%eta) < nid .or. size(self%kcnchi) < nid) then
+      call fatal_error(error, "Charge model parameter arrays have insufficient size")
+      return
+   end if
+
+   if (.not. all(ieee_is_finite(self%chi(:nid))) &
+      & .or. .not. all(ieee_is_finite(self%rad(:nid))) &
+      & .or. .not. all(ieee_is_finite(self%eta(:nid))) &
+      & .or. .not. all(ieee_is_finite(self%kcnchi(:nid)))) then
+      call fatal_error(error, "Charge model parameters contain non-finite values")
+      return
+   end if
+
+   if (any(self%rad(:nid) <= 0.0_wp)) then
+      call fatal_error(error, "Charge model Gaussian radii must be positive")
+      return
+   end if
+
+   call self%check_model(mol, error)
+   if (allocated(error)) return
+
+   if (.not. allocated(mol%periodic)) then
+      call fatal_error(error, "Periodic boundary flags are not allocated")
+      return
+   end if
+
+   if (.not. any(mol%periodic)) return
+
+   if (size(mol%periodic) < 3) then
+      call fatal_error(error, "Periodic boundary flags have invalid dimensions")
+      return
+   end if
+
+   if (.not. allocated(mol%lattice)) then
+      call fatal_error(error, "Periodic structure has unallocated lattice")
+      return
+   end if
+
+   if (size(mol%lattice, 1) < 3 .or. size(mol%lattice, 2) < 3) then
+      call fatal_error(error, "Periodic lattice has invalid dimensions")
+      return
+   end if
+
    call get_periodic_axes(mol%periodic, ndim, p_axes)
 
    if (.not. self%supports_charged_lowd()) then
@@ -216,7 +306,7 @@ subroutine check_structure(self, mol, error)
       a1 = mol%lattice(:, 1)
       a2 = mol%lattice(:, 2)
       a3 = mol%lattice(:, 3)
-      if (.not. all(ieee_is_finite(mol%lattice))) then
+      if (.not. all(ieee_is_finite(mol%lattice(:3, :3)))) then
          call fatal_error(error, "3D periodic lattice vectors contain non-finite values")
          return
       end if
@@ -310,6 +400,81 @@ subroutine solve(self, mol, error, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL, &
 
    call check_structure(self, mol, error)
    if (allocated(error)) return
+
+   if (size(cn) < mol%nat .or. size(qloc) < mol%nat) then
+      call fatal_error(error, "Coordination number or local charge array has insufficient size")
+      return
+   end if
+
+   if (present(dcndr)) then
+      if (size(dcndr, 1) < 3 .or. size(dcndr, 2) < mol%nat .or. size(dcndr, 3) < mol%nat) then
+         call fatal_error(error, "Coordination number derivative array dcndr has invalid dimensions")
+         return
+      end if
+   end if
+
+   if (present(dcndL)) then
+      if (size(dcndL, 1) < 3 .or. size(dcndL, 2) < 3 .or. size(dcndL, 3) < mol%nat) then
+         call fatal_error(error, "Coordination number strain derivative array dcndL has invalid dimensions")
+         return
+      end if
+   end if
+
+   if (present(dqlocdr)) then
+      if (size(dqlocdr, 1) < 3 .or. size(dqlocdr, 2) < mol%nat .or. size(dqlocdr, 3) < mol%nat) then
+         call fatal_error(error, "Local charge derivative array dqlocdr has invalid dimensions")
+         return
+      end if
+   end if
+
+   if (present(dqlocdL)) then
+      if (size(dqlocdL, 1) < 3 .or. size(dqlocdL, 2) < 3 .or. size(dqlocdL, 3) < mol%nat) then
+         call fatal_error(error, "Local charge strain derivative array dqlocdL has invalid dimensions")
+         return
+      end if
+   end if
+
+   if (present(qvec)) then
+      if (size(qvec) < mol%nat) then
+         call fatal_error(error, "Charge vector qvec has insufficient size")
+         return
+      end if
+   end if
+
+   if (present(energy)) then
+      if (size(energy) < mol%nat) then
+         call fatal_error(error, "Energy vector has insufficient size")
+         return
+      end if
+   end if
+
+   if (present(gradient)) then
+      if (size(gradient, 1) < 3 .or. size(gradient, 2) < mol%nat) then
+         call fatal_error(error, "Gradient array has invalid dimensions")
+         return
+      end if
+   end if
+
+   if (present(sigma)) then
+      if (size(sigma, 1) < 3 .or. size(sigma, 2) < 3) then
+         call fatal_error(error, "Virial array sigma has invalid dimensions")
+         return
+      end if
+   end if
+
+   if (present(dqdr)) then
+      if (size(dqdr, 1) < 3 .or. size(dqdr, 2) < mol%nat .or. size(dqdr, 3) < mol%nat) then
+         call fatal_error(error, "Charge derivative array dqdr has invalid dimensions")
+         return
+      end if
+   end if
+
+   if (present(dqdL)) then
+      if (size(dqdL, 1) < 3 .or. size(dqdL, 2) < 3 .or. size(dqdL, 3) < mol%nat) then
+         call fatal_error(error, "Charge strain derivative array dqdL has invalid dimensions")
+         return
+      end if
+   end if
 
    cache => local_cache
    if (present(response)) then
@@ -464,6 +629,7 @@ subroutine add_charge_hessian(self, mol, error, weights, hessian, cache)
    nat = mol%nat
    call check_structure(self, mol, error)
    if (allocated(error)) return
+
    if (size(weights) /= nat .or. any(shape(hessian) /= 3*nat)) then
       call fatal_error(error, "Invalid dimensions for charge Hessian contraction")
       return

@@ -20,7 +20,7 @@
 !> Interface to the charge models
 module multicharge_charge
    use mctc_cutoff, only : get_lattice_points, wrap_to_central_cell
-   use mctc_env, only : error_type, wp
+   use mctc_env, only : error_type, fatal_error, wp
    use mctc_io, only : structure_type
    use multicharge_model, only : mchrg_model_type
    use multicharge_model_cache, only : cache_container
@@ -69,6 +69,25 @@ subroutine get_charges(mchrg_model, mol, error, qvec, dqdr, dqdL, cache)
 
    call mchrg_model%check_structure(mol, error)
    if (allocated(error)) return
+
+   if (size(qvec) < mol%nat) then
+      call fatal_error(error, "Charge vector qvec has insufficient size")
+      return
+   end if
+
+   if (present(dqdr)) then
+      if (size(dqdr, 1) < 3 .or. size(dqdr, 2) < mol%nat .or. size(dqdr, 3) < mol%nat) then
+         call fatal_error(error, "Charge derivative array dqdr has invalid dimensions")
+         return
+      end if
+   end if
+
+   if (present(dqdL)) then
+      if (size(dqdL, 1) < 3 .or. size(dqdL, 2) < 3 .or. size(dqdL, 3) < mol%nat) then
+         call fatal_error(error, "Charge strain derivative array dqdL has invalid dimensions")
+         return
+      end if
+   end if
 
    allocate(cn(mol%nat), qloc(mol%nat))
    if (grad) then

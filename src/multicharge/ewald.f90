@@ -112,7 +112,7 @@ subroutine get_alpha(lattice, alpha, periodic)
    logical, intent(in), optional :: periodic(:)
 
    integer :: ndim, p_axes(3)
-   real(wp) :: vol, rec_lat(3, 3)
+   real(wp) :: vol, red_lat(3, 3), rec_lat(3, 3)
 
    if (present(periodic)) then
       call get_periodic_axes(periodic, ndim, p_axes)
@@ -131,10 +131,11 @@ subroutine get_alpha(lattice, alpha, periodic)
       end select
    end if
 
-   vol = abs(matdet_3x3(lattice))
-   rec_lat = twopi * transpose(matinv_3x3(lattice))
+   call reduce_basis_3d(lattice, red_lat)
+   vol = abs(matdet_3x3(red_lat))
+   rec_lat = twopi * transpose(matinv_3x3(red_lat))
 
-   call search_alpha(lattice, rec_lat, vol, eps, alpha, get_rec_term_3d)
+   call search_alpha(red_lat, rec_lat, vol, eps, alpha, get_rec_term_3d)
    if (vol > eps) then
       alpha = max(alpha, sqrt(pi) / vol**(1.0_wp / 3.0_wp))
    end if
@@ -162,7 +163,7 @@ subroutine get_ewald_dir_trans_3d(lattice, alpha, gam_min, trans, max_rij, &
    !> Optional error handling when resource limit is exceeded
    type(error_type), allocatable, intent(out), optional :: error
 
-   real(wp) :: inv_lat(3, 3), len_max
+   real(wp) :: red_lat(3, 3), inv_lat(3, 3), len_max
    real(wp) :: kappa, kappa_max, tol_val, u_cut, rcut, r_disp, r_dir
    integer(i8) :: rep_i8(3), ntr_i8, limit_i8
    integer :: rep(3), limit, k
@@ -173,8 +174,9 @@ subroutine get_ewald_dir_trans_3d(lattice, alpha, gam_min, trans, max_rij, &
    if (present(max_trans)) limit = max_trans
    limit_i8 = int(limit, i8)
 
-   inv_lat = transpose(matinv_3x3(lattice))
-   len_max = max(norm2(lattice(:, 1)), norm2(lattice(:, 2)), norm2(lattice(:, 3)))
+   call reduce_basis_3d(lattice, red_lat)
+   inv_lat = transpose(matinv_3x3(red_lat))
+   len_max = max(norm2(red_lat(:, 1)), norm2(red_lat(:, 2)), norm2(red_lat(:, 3)))
 
    kappa = min(alpha, gam_min)
    kappa_max = max(alpha, gam_min)
@@ -220,7 +222,7 @@ subroutine get_ewald_dir_trans_3d(lattice, alpha, gam_min, trans, max_rij, &
    end do
 
    rep = int(rep_i8)
-   call get_lattice_points(lattice, rep, .true., trans, error=error, max_trans=limit_i8)
+   call get_lattice_points(red_lat, rep, .true., trans, error=error, max_trans=limit_i8)
 
 end subroutine get_ewald_dir_trans_3d
 
@@ -240,7 +242,7 @@ subroutine get_ewald_rec_trans_3d(lattice, alpha, trans, tol, max_trans, error)
    !> Optional error handling when resource limit is exceeded
    type(error_type), allocatable, intent(out), optional :: error
 
-   real(wp) :: rec_lat(3, 3), vol, rlen_min
+   real(wp) :: red_lat(3, 3), rec_lat(3, 3), vol, rlen_min
    real(wp) :: tol_val, u_cut, gcut
    integer(i8) :: rep_i8(3), ntr_i8, limit_i8
    integer :: rep(3), limit, k
@@ -251,8 +253,9 @@ subroutine get_ewald_rec_trans_3d(lattice, alpha, trans, tol, max_trans, error)
    if (present(max_trans)) limit = max_trans
    limit_i8 = int(limit, i8)
 
-   vol = abs(matdet_3x3(lattice))
-   rec_lat = twopi * transpose(matinv_3x3(lattice))
+   call reduce_basis_3d(lattice, red_lat)
+   vol = abs(matdet_3x3(red_lat))
+   rec_lat = twopi * transpose(matinv_3x3(red_lat))
    rlen_min = min(norm2(rec_lat(:, 1)), norm2(rec_lat(:, 2)), norm2(rec_lat(:, 3)))
 
    u_cut = sqrt(max(42.25_wp, -log(tol_val) &
@@ -264,7 +267,7 @@ subroutine get_ewald_rec_trans_3d(lattice, alpha, trans, tol, max_trans, error)
 
    ntr_i8 = 1_i8
    do k = 1, 3
-      if (.not. (gcut * norm2(lattice(:, k)) / twopi <= real(limit_i8, wp))) then
+      if (.not. (gcut * norm2(red_lat(:, k)) / twopi <= real(limit_i8, wp))) then
          if (present(error)) then
             call fatal_error(error, &
                & "3D Ewald reciprocal-space summation exceeds maximum translation limit")
@@ -272,7 +275,7 @@ subroutine get_ewald_rec_trans_3d(lattice, alpha, trans, tol, max_trans, error)
          allocate(trans(3, 0))
          return
       end if
-      rep_i8(k) = max(2_i8, ceiling(gcut * norm2(lattice(:, k)) / twopi, kind=i8))
+      rep_i8(k) = max(2_i8, ceiling(gcut * norm2(red_lat(:, k)) / twopi, kind=i8))
       if (rep_i8(k) > limit_i8) then
          if (present(error)) then
             call fatal_error(error, &
@@ -375,6 +378,64 @@ pure subroutine reduce_basis_2d(a1, a2, u1, u2)
    end if
 
 end subroutine reduce_basis_2d
+
+
+!> Reduce a 3D periodic lattice basis using LLL basis reduction
+pure subroutine reduce_basis_3d(lattice, red_lat)
+   !> Input 3D lattice basis (3, 3)
+   real(wp), intent(in) :: lattice(:, :)
+   !> Reduced 3D lattice basis (3, 3)
+   real(wp), intent(out) :: red_lat(3, 3)
+
+   real(wp), parameter :: delta = 0.75_wp
+   real(wp), parameter :: tol_mu = 0.5_wp * (1.0_wp + 1.0e-12_wp)
+   real(wp) :: bstar(3, 3), bnorm(3), mu(3, 3), v(3), tmp(3), m_ij
+   integer :: k, i, j, iter
+
+   red_lat = lattice(:, :3)
+   k = 2
+   iter = 0
+   do while (k <= 3 .and. iter < 200)
+      iter = iter + 1
+
+      do i = 1, 3
+         v = red_lat(:, i)
+         do j = 1, i - 1
+            if (bnorm(j) > tiny(1.0_wp)) then
+               mu(i, j) = dot_product(red_lat(:, i), bstar(:, j)) / bnorm(j)
+            else
+               mu(i, j) = 0.0_wp
+            end if
+            v = v - mu(i, j) * bstar(:, j)
+         end do
+         bstar(:, i) = v
+         bnorm(i) = dot_product(v, v)
+      end do
+
+      do j = k - 1, 1, -1
+         if (abs(mu(k, j)) > tol_mu) then
+            m_ij = anint(mu(k, j))
+            if (abs(m_ij) >= 1.0_wp) then
+               red_lat(:, k) = red_lat(:, k) - m_ij * red_lat(:, j)
+               do i = 1, j - 1
+                  mu(k, i) = mu(k, i) - m_ij * mu(j, i)
+               end do
+               mu(k, j) = mu(k, j) - m_ij
+            end if
+         end if
+      end do
+
+      if (bnorm(k) >= (delta - mu(k, k - 1)**2) * bnorm(k - 1)) then
+         k = k + 1
+      else
+         tmp = red_lat(:, k)
+         red_lat(:, k) = red_lat(:, k - 1)
+         red_lat(:, k - 1) = tmp
+         k = max(2, k - 1)
+      end if
+   end do
+
+end subroutine reduce_basis_3d
 
 
 !> Select optimal Ewald alpha for a 2D periodic slab from its two periodic vectors
