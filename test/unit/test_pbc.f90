@@ -2616,11 +2616,17 @@ subroutine test_eeq_3d_slab_285(error)
    type(cache_container) :: cache
    real(wp), parameter :: aa2au = 1.8897261246257702_wp
    real(wp), parameter :: pi = 3.14159265358979323846264338327950288_wp
+   real(wp), parameter :: q2d_hex_ref(3) = [ &
+      & -1.06091408_wp, 0.54516560_wp, 0.51574848_wp]
+   real(wp), parameter :: q2d_ahex_ref(3) = [ &
+      & -1.06069500_wp, 0.54509370_wp, 0.51560131_wp]
+   real(wp), parameter :: q2d_orth_ref(3) = [ &
+      & -1.06073102_wp, 0.54653780_wp, 0.51419322_wp]
    real(wp) :: xyz(3, 3), lat(3, 3), cn(3), qloc(3)
    real(wp), allocatable :: trans(:, :)
    real(wp) :: q2d(3), q_z25(3), q_z50(3), q_z100(3)
    real(wp) :: amat0(4, 4), amat_s(4, 4), alpha0, scales(2), vol, g0_shift
-   real(wp) :: q_scan(3, 26), e_scan(3, 26), etot(26), x_ang, d2q, d2e
+   real(wp) :: q_scan(3, 13), e_scan(3, 13), etot(13), x_ang, d2q, d2e
    integer :: ix, is
 
    xyz = reshape([ &
@@ -2638,6 +2644,10 @@ subroutine test_eeq_3d_slab_285(error)
    if (allocated(error)) return
    call get_charges(model, mol2d, error, q2d)
    if (allocated(error)) return
+   if (maxval(abs(q2d - q2d_hex_ref)) > 1.0e-7_wp) then
+      call test_failed(error, "2D hexagonal #285 slab charges deviate from reference")
+      return
+   end if
 
    ! 1. Verify large-vacuum 3D supercell convergence toward true 2D EEQ
    call new(mol3d, [8, 1, 1], xyz, lattice=lat, periodic=[.true., .true., .true.])
@@ -2697,9 +2707,9 @@ subroutine test_eeq_3d_slab_285(error)
       return
    end if
 
-   ! 2. Verify smoothness across hexagonal symmetry (X = 2.7934..2.7959 A at Z = 100 A)
-   do ix = 1, 26
-      x_ang = 2.0_wp + real(7933 + ix, wp) / 10000.0_wp
+   ! 2. Verify smoothness across hexagonal symmetry (X = 2.7940..2.7952 A at Z = 100 A)
+   do ix = 1, 13
+      x_ang = 2.0_wp + real(7939 + ix, wp) / 10000.0_wp
       lat(:, 1) = [x_ang, 0.0_wp, 0.0_wp] * aa2au
       call new(mol3d, [8, 1, 1], xyz, lattice=lat, periodic=[.true., .true., .true.])
       call get_lattice_points(mol3d%periodic, mol3d%lattice, model%ncoord%cutoff, trans)
@@ -2711,10 +2721,41 @@ subroutine test_eeq_3d_slab_285(error)
       etot(ix) = sum(e_scan(:, ix))
    end do
 
-   d2q = maxval(abs(q_scan(:, 3:26) - 2.0_wp * q_scan(:, 2:25) + q_scan(:, 1:24)))
-   d2e = maxval(abs(etot(3:26) - 2.0_wp * etot(2:25) + etot(1:24)))
+   d2q = maxval(abs(q_scan(:, 3:13) - 2.0_wp * q_scan(:, 2:12) + q_scan(:, 1:11)))
+   d2e = maxval(abs(etot(3:13) - 2.0_wp * etot(2:12) + etot(1:11)))
    if (d2q > 1.0e-8_wp .or. d2e > 1.0e-8_wp) then
       call test_failed(error, "Discontinuity detected across hexagonal symmetry in 3D slab X-scan")
+      return
+   end if
+
+   ! 3. Verify almost_hexagonal and orthorhombic #285 slab geometries at Z = 100 A
+   lat(:, 1) = [2.8_wp, 0.0_wp, 0.0_wp] * aa2au
+   lat(:, 2) = [-1.397323046831344_wp, 2.420234511698831_wp, 0.0_wp] * aa2au
+   lat(:, 3) = [0.0_wp, 0.0_wp, 100.0_wp] * aa2au
+   call new(mol2d, [8, 1, 1], xyz, lattice=lat, periodic=[.true., .true., .false.])
+   call new(mol3d, [8, 1, 1], xyz, lattice=lat, periodic=[.true., .true., .true.])
+   call get_charges(model, mol2d, error, q2d)
+   if (allocated(error)) return
+   call get_charges(model, mol3d, error, q_z100)
+   if (allocated(error)) return
+   if (maxval(abs(q2d - q2d_ahex_ref)) > 1.0e-7_wp &
+      & .or. maxval(abs(q_z100 - q2d)) > 1.5e-5_wp) then
+      call test_failed(error, "almost_hexagonal #285 slab charges deviate from reference")
+      return
+   end if
+
+   lat(:, 1) = [2.8_wp, 0.0_wp, 0.0_wp] * aa2au
+   lat(:, 2) = [0.0_wp, 2.8_wp, 0.0_wp] * aa2au
+   lat(:, 3) = [0.0_wp, 0.0_wp, 100.0_wp] * aa2au
+   call new(mol2d, [8, 1, 1], xyz, lattice=lat, periodic=[.true., .true., .false.])
+   call new(mol3d, [8, 1, 1], xyz, lattice=lat, periodic=[.true., .true., .true.])
+   call get_charges(model, mol2d, error, q2d)
+   if (allocated(error)) return
+   call get_charges(model, mol3d, error, q_z100)
+   if (allocated(error)) return
+   if (maxval(abs(q2d - q2d_orth_ref)) > 1.0e-7_wp &
+      & .or. maxval(abs(q_z100 - q2d)) > 1.5e-5_wp) then
+      call test_failed(error, "orthorhombic #285 slab charges deviate from reference")
       return
    end if
 

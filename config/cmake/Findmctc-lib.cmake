@@ -16,7 +16,7 @@
 set(_lib "mctc-lib")
 set(_pkg "MCTCLIB")
 set(_url "https://github.com/grimme-lab/mctc-lib")
-set(_rev "841ca7546a378156ba31e25179e9adb1afa792ce")
+set(_rev "1ef1cee0973c88229424e187f9618673c0b7a67b")
 
 if(NOT DEFINED "${_pkg}_FIND_METHOD")
   if(DEFINED "${PROJECT_NAME}-dependency-method")

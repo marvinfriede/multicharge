@@ -1,4 +1,4 @@
 [wrap-git]
 directory = mctc-lib
 url = https://github.com/grimme-lab/mctc-lib
-revision = 841ca7546a378156ba31e25179e9adb1afa792ce
+revision = 1ef1cee0973c88229424e187f9618673c0b7a67b
