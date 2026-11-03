@@ -14,13 +14,13 @@
 ! limitations under the License.
 
 module test_wignerseitz
-   use mctc_cutoff, only: get_lattice_points, cutoff_stat
+   use mctc_cutoff, only: get_lattice_points
    use mctc_env, only: wp
    use mctc_env_testing, only: new_unittest, unittest_type, error_type, check, &
       & test_failed
    use mctc_io_structure, only: structure_type, new
    use mctc_wignerseitz, only: wignerseitz_cell, new_wignerseitz_cell, &
-      & get_wignerseitz_weights, wsc_stat
+      & get_wignerseitz_weights
    use mstore, only: get_structure
    use multicharge, only: mchrg_model_type, new_eeq2019_model, new_eeqbc2025_model, &
       & get_charges
@@ -585,7 +585,6 @@ subroutine test_wsc_resource_limits(error)
    class(mchrg_model_type), allocatable :: model_eeq, model_eeqbc
    real(wp) :: lattice(3, 3), xyz(3, 2), qvec(2)
    real(wp), allocatable :: trans(:, :)
-   integer :: stat
 
    ! 1. 1D resource-limit regression (> 100,000 candidate periods)
    lattice = 0.0_wp
@@ -594,9 +593,7 @@ subroutine test_wsc_resource_limits(error)
    xyz(:, 2) = 1.0e5_wp * lattice(:, 1) + [1.2_wp, 0.0_wp, 0.0_wp]
    call new(mol, [6, 8], xyz, lattice=lattice, periodic=[.true., .false., .false.])
 
-   call new_wignerseitz_cell(wsc, mol, error=call_err, stat=stat)
-   call check(error, stat, wsc_stat%resource_exhausted)
-   if (allocated(error)) return
+   call new_wignerseitz_cell(wsc, mol, error=call_err)
    if (.not. allocated(call_err) .or. allocated(wsc%trans)) then
       call test_failed(error, "1D resource limit did not fail cleanly in new_wignerseitz_cell")
       return
@@ -630,9 +627,7 @@ subroutine test_wsc_resource_limits(error)
       & + [1.2_wp, 1.3_wp, 0.0_wp]
    call new(mol, [6, 8], xyz, lattice=lattice, periodic=[.true., .true., .false.])
 
-   call new_wignerseitz_cell(wsc, mol, error=call_err, stat=stat)
-   call check(error, stat, wsc_stat%resource_exhausted)
-   if (allocated(error)) return
+   call new_wignerseitz_cell(wsc, mol, error=call_err)
    if (.not. allocated(call_err) .or. allocated(wsc%trans)) then
       call test_failed(error, "2D resource limit did not fail cleanly in new_wignerseitz_cell")
       return
@@ -658,18 +653,14 @@ subroutine test_wsc_resource_limits(error)
    lattice(1, 1) = 5.0_wp
    lattice(2, 2) = 5.0_wp
    lattice(3, 3) = 5.0_wp
-   call get_lattice_points(lattice, [650, 650, 650], .true., trans, error=call_err, stat=stat)
-   call check(error, stat, cutoff_stat%integer_overflow)
-   if (allocated(error)) return
+   call get_lattice_points(lattice, [650, 650, 650], .true., trans, error=call_err)
    if (.not. allocated(call_err) .or. allocated(trans)) then
       call test_failed(error, "rep = [650, 650, 650] did not fail cleanly in get_lattice_points")
       return
    end if
    deallocate(call_err)
 
-   call get_lattice_points(lattice, [200, 200, 200], .true., trans, error=call_err, stat=stat)
-   call check(error, stat, cutoff_stat%resource_exhausted)
-   if (allocated(error)) return
+   call get_lattice_points(lattice, [200, 200, 200], .true., trans, error=call_err)
    if (.not. allocated(call_err) .or. allocated(trans)) then
       call test_failed(error, "rep = [200, 200, 200] did not fail cleanly in get_lattice_points")
       return

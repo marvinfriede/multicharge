@@ -373,6 +373,15 @@ subroutine get_xvec(self, mol, cache, xvec)
    call view(cache, ptr)
 
    xvec(:) = 0.0_wp
+   if (allocated(cache%error)) return
+   if (any(mol%periodic)) then
+      if (.not. allocated(ptr%wsc%trans)) then
+         call fatal_error(cache%error, &
+            & "EEQBC right-hand side requires an initialized periodic Wigner-Seitz cell")
+         return
+      end if
+   end if
+
    !$omp parallel do default(none) schedule(runtime) &
    !$omp shared(mol, self, ptr, xvec) &
    !$omp private(iat, izp)
@@ -438,10 +447,18 @@ subroutine get_xvec_derivs(self, mol, cache, dxdr, dxdL)
    real(wp), allocatable :: dxdr_local(:, :, :), dxdL_local(:, :, :), dtmpdr_local(:, :, :), dtmpdL_local(:, :, :)
 
    call view(cache, ptr)
-   allocate(dtmpdr(3, mol%nat, mol%nat + 1), dtmpdL(3, 3, mol%nat + 1))
-
    dxdr(:, :, :) = 0.0_wp
    dxdL(:, :, :) = 0.0_wp
+   if (allocated(cache%error)) return
+   if (any(mol%periodic)) then
+      if (.not. allocated(ptr%wsc%trans)) then
+         call fatal_error(cache%error, &
+            & "EEQBC right-hand side derivatives require an initialized periodic Wigner-Seitz cell")
+         return
+      end if
+   end if
+   allocate(dtmpdr(3, mol%nat, mol%nat + 1), dtmpdL(3, 3, mol%nat + 1))
+
    dtmpdr(:, :, :) = 0.0_wp
    dtmpdL(:, :, :) = 0.0_wp
 
@@ -728,7 +745,20 @@ subroutine get_coulomb_matrix(self, mol, cache, amat)
    real(wp), intent(out) :: amat(:, :)
 
    type(eeqbc_cache), pointer :: ptr
+
+   if (allocated(cache%error)) then
+      amat = 0.0_wp
+      return
+   end if
    call view(cache, ptr)
+   if (any(mol%periodic)) then
+      if (.not. allocated(ptr%wsc%trans)) then
+         amat = 0.0_wp
+         call fatal_error(cache%error, &
+            & "EEQBC Coulomb matrix requires an initialized periodic Wigner-Seitz cell")
+         return
+      end if
+   end if
 
    select case (count(mol%periodic))
    case (1, 2, 3)
@@ -801,7 +831,7 @@ subroutine get_amat_pbc(self, mol, wsc, cn, qloc, cmat, amat, error)
    type(wignerseitz_cell), intent(in) :: wsc
    real(wp), intent(in) :: cn(:), qloc(:), cmat(:, :)
    real(wp), intent(out) :: amat(:, :)
-   type(error_type), allocatable, intent(out), optional :: error
+   type(error_type), allocatable, intent(out) :: error
 
    integer :: iat, jat, izp, jzp, img
    real(wp) :: vec(3), gam, dtmp, capi, capj, radi, radj, norm_cn, rvdw, wsw
@@ -812,9 +842,7 @@ subroutine get_amat_pbc(self, mol, wsc, cn, qloc, cmat, amat, error)
 
    amat(:, :) = 0.0_wp
    call get_eeqbc_dir_trans(self, mol, wsc, dtrans, error)
-   if (present(error)) then
-      if (allocated(error)) return
-   end if
+   if (allocated(error)) return
 
    !$omp parallel default(none) &
    !$omp shared(amat, cmat, mol, cn, qloc, self, wsc, dtrans)  &
@@ -908,7 +936,24 @@ subroutine get_coulomb_derivs(self, mol, cache, qvec, dadr, dadL, atrace)
    real(wp), intent(out) :: dadr(:, :, :), dadL(:, :, :), atrace(:, :)
 
    type(eeqbc_cache), pointer :: ptr
+
+   if (allocated(cache%error)) then
+      dadr = 0.0_wp
+      dadL = 0.0_wp
+      atrace = 0.0_wp
+      return
+   end if
    call view(cache, ptr)
+   if (any(mol%periodic)) then
+      if (.not. allocated(ptr%wsc%trans)) then
+         dadr = 0.0_wp
+         dadL = 0.0_wp
+         atrace = 0.0_wp
+         call fatal_error(cache%error, &
+            & "EEQBC Coulomb derivatives require an initialized periodic Wigner-Seitz cell")
+         return
+      end if
+   end if
 
    select case (count(mol%periodic))
    case (1, 2, 3)
@@ -1073,7 +1118,7 @@ subroutine get_damat_pbc(self, mol, wsc, cn, qloc, qvec, dcndr, dcndL, dqlocdr, 
    real(wp), intent(out) :: dadr(:, :, :)
    real(wp), intent(out) :: dadL(:, :, :)
    real(wp), intent(out) :: atrace(:, :)
-   type(error_type), allocatable, intent(out), optional :: error
+   type(error_type), allocatable, intent(out) :: error
 
    integer :: iat, jat, izp, jzp, img
    real(wp) :: vec(3), r2, gam, arg, dtmp, norm_cn, rvdw, wsw, dgam
@@ -1089,9 +1134,7 @@ subroutine get_damat_pbc(self, mol, wsc, cn, qloc, qvec, dcndr, dcndL, dqlocdr, 
    dadr(:, :, :) = 0.0_wp
    dadL(:, :, :) = 0.0_wp
    call get_eeqbc_dir_trans(self, mol, wsc, dtrans, error)
-   if (present(error)) then
-      if (allocated(error)) return
-   end if
+   if (allocated(error)) return
 
    allocate(dgamdr(3, mol%nat))
 
@@ -1340,6 +1383,7 @@ subroutine get_cmat_3d(self, mol, wsc, cmat, error)
    real(wp), intent(out) :: cmat(:, :)
    type(error_type), allocatable, intent(out), optional :: error
 
+   type(error_type), allocatable :: local_error
    integer :: iat, jat, izp, jzp, img
    real(wp) :: vec(3), rvdw, tmp, capi, capj, wsw
    real(wp), allocatable :: dtrans(:, :)
@@ -1348,9 +1392,10 @@ subroutine get_cmat_3d(self, mol, wsc, cmat, error)
    real(wp), allocatable :: cmat_local(:, :)
 
    cmat(:, :) = 0.0_wp
-   call get_eeqbc_dir_trans(self, mol, wsc, dtrans, error)
-   if (present(error)) then
-      if (allocated(error)) return
+   call get_eeqbc_dir_trans(self, mol, wsc, dtrans, local_error)
+   if (allocated(local_error)) then
+      if (present(error)) call move_alloc(local_error, error)
+      return
    end if
 
    !$omp parallel default(none) &
@@ -1522,6 +1567,7 @@ subroutine get_dcmat_3d(self, mol, wsc, dcdr, dcdL, error)
    real(wp), intent(out) :: dcdL(:, :, :)
    type(error_type), allocatable, intent(out), optional :: error
 
+   type(error_type), allocatable :: local_error
    integer :: iat, jat, izp, jzp, img
    real(wp) :: vec(3), rvdw, dG(3), dS(3, 3), capi, capj, wsw
    real(wp), allocatable :: dtrans(:, :)
@@ -1531,9 +1577,10 @@ subroutine get_dcmat_3d(self, mol, wsc, dcdr, dcdL, error)
 
    dcdr(:, :, :) = 0.0_wp
    dcdL(:, :, :) = 0.0_wp
-   call get_eeqbc_dir_trans(self, mol, wsc, dtrans, error)
-   if (present(error)) then
-      if (allocated(error)) return
+   call get_eeqbc_dir_trans(self, mol, wsc, dtrans, local_error)
+   if (allocated(local_error)) then
+      if (present(error)) call move_alloc(local_error, error)
+      return
    end if
 
    !$omp parallel default(none) &
@@ -1619,8 +1666,8 @@ subroutine get_eeqbc_dir_trans(self, mol, wsc, dtrans, error)
    type(wignerseitz_cell), intent(in) :: wsc
    !> Direct-space lattice translation vectors
    real(wp), allocatable, intent(out) :: dtrans(:, :)
-   !> Optional error handling
-   type(error_type), allocatable, intent(out), optional :: error
+   !> Error handling
+   type(error_type), allocatable, intent(out) :: error
 
    integer :: ndim, iat, jat, img
    real(wp) :: rcut, rvdw_max, r_disp, kbc_eff, vec(3)

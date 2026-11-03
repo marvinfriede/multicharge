@@ -322,7 +322,7 @@ subroutine add_periodic_hessian(self, mol, wsc, alpha, qvec, adj, hessian, diago
    real(wp), intent(in) :: alpha, qvec(:), adj(:)
    real(wp), intent(inout) :: hessian(:, :)
    real(wp), intent(inout) :: diagonal(:, :, :)
-   type(error_type), allocatable, intent(out), optional :: error
+   type(error_type), allocatable, intent(out) :: error
    integer :: iat, jat, izp, jzp, img, itr, ipair, npair
    real(wp) :: rij(3), vec(3), box(3, 3), gam, gam_min, max_rij, r, weight, wsw
    real(wp) :: val, dr, drr, ar, arr
@@ -331,13 +331,9 @@ subroutine add_periodic_hessian(self, mol, wsc, alpha, qvec, adj, hessian, diago
    gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
    max_rij = get_max_wsc_disp(mol, wsc)
    call get_ewald_dir_trans_3d(mol%lattice, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
-   if (present(error)) then
-      if (allocated(error)) return
-   end if
+   if (allocated(error)) return
    call get_ewald_rec_trans_3d(mol%lattice, alpha, rtrans, error=error)
-   if (present(error)) then
-      if (allocated(error)) return
-   end if
+   if (allocated(error)) return
    call get_rec_weights(abs(matdet_3x3(mol%lattice)), alpha, rtrans, rec_weight)
 
    ! Each pair owns its off-diagonal blocks. Only the diagonal blocks are
@@ -387,7 +383,7 @@ subroutine add_periodic_hessian_2d(self, mol, wsc, alpha, qvec, adj, hessian, di
    real(wp), intent(in) :: alpha, qvec(:), adj(:)
    real(wp), intent(inout) :: hessian(:, :)
    real(wp), intent(inout) :: diagonal(:, :, :)
-   type(error_type), allocatable, intent(out), optional :: error
+   type(error_type), allocatable, intent(out) :: error
 
    integer :: iat, jat, izp, jzp, img, itr, ipair, npair, ndim, p_axes(3)
    real(wp) :: rij(3), vec(3), g_vec(3), box(3, 3), gam, gam_min, max_rij, r, weight, wsw
@@ -402,13 +398,9 @@ subroutine add_periodic_hessian_2d(self, mol, wsc, alpha, qvec, adj, hessian, di
    gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
    max_rij = get_max_wsc_disp(mol, wsc)
    call get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
-   if (present(error)) then
-      if (allocated(error)) return
-   end if
+   if (allocated(error)) return
    call get_ewald_rec_trans_2d(a1, a2, alpha, rtrans, area, n_hat, error=error)
-   if (present(error)) then
-      if (allocated(error)) return
-   end if
+   if (allocated(error)) return
    nn_mat = outerprod(n_hat, n_hat)
 
    npair = mol%nat*(mol%nat+1)/2
@@ -475,7 +467,7 @@ subroutine add_periodic_hessian_1d(self, mol, wsc, alpha, qvec, adj, hessian, di
    type(wignerseitz_cell), intent(in) :: wsc
    real(wp), intent(in) :: alpha, qvec(:), adj(:)
    real(wp), intent(inout) :: hessian(:, :), diagonal(:, :, :)
-   type(error_type), allocatable, intent(out), optional :: error
+   type(error_type), allocatable, intent(out) :: error
 
    integer :: iat, jat, izp, jzp, img, itr, ipair, npair, ndim, p_axes(3)
    real(wp) :: gam, gam_min, max_rij, wsw, rij(3), vec(3), r, weight, box(3, 3)
@@ -493,13 +485,9 @@ subroutine add_periodic_hessian_1d(self, mol, wsc, alpha, qvec, adj, hessian, di
    gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
    max_rij = get_max_wsc_disp(mol, wsc)
    call get_ewald_dir_trans_1d(a1, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
-   if (present(error)) then
-      if (allocated(error)) return
-   end if
+   if (allocated(error)) return
    call get_ewald_rec_trans_1d(a1, alpha, rtrans, len1, u_hat, error=error)
-   if (present(error)) then
-      if (allocated(error)) return
-   end if
+   if (allocated(error)) return
    p_par = outerprod(u_hat, u_hat)
    p_perp = unity - p_par
    alp2 = alpha * alpha
@@ -567,7 +555,19 @@ subroutine get_coulomb_matrix(self, mol, cache, amat)
 
    type(eeq_cache), pointer :: ptr
 
+   if (allocated(cache%error)) then
+      amat = 0.0_wp
+      return
+   end if
    call view(cache, ptr)
+   if (any(mol%periodic)) then
+      if (.not. allocated(ptr%wsc%trans)) then
+         amat = 0.0_wp
+         call fatal_error(cache%error, &
+            & "EEQ Coulomb matrix requires an initialized periodic Wigner-Seitz cell")
+         return
+      end if
+   end if
 
    select case (count(mol%periodic))
    case (3)
@@ -629,7 +629,7 @@ subroutine get_amat_3d(self, mol, wsc, alpha, amat, error)
    type(wignerseitz_cell), intent(in) :: wsc
    real(wp), intent(in) :: alpha
    real(wp), intent(out) :: amat(:, :)
-   type(error_type), allocatable, intent(out), optional :: error
+   type(error_type), allocatable, intent(out) :: error
 
    integer :: iat, jat, izp, jzp, img, ipair, npair
    real(wp) :: vec(3), gam, gam_min, max_rij, wsw, dtmp, rtmp, tmp
@@ -639,13 +639,9 @@ subroutine get_amat_3d(self, mol, wsc, alpha, amat, error)
    gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
    max_rij = get_max_wsc_disp(mol, wsc)
    call get_ewald_dir_trans_3d(mol%lattice, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
-   if (present(error)) then
-      if (allocated(error)) return
-   end if
+   if (allocated(error)) return
    call get_ewald_rec_trans_3d(mol%lattice, alpha, rtrans, error=error)
-   if (present(error)) then
-      if (allocated(error)) return
-   end if
+   if (allocated(error)) return
    call get_rec_weights(abs(matdet_3x3(mol%lattice)), alpha, rtrans, rec_weight)
 
    npair = mol%nat*(mol%nat+1)/2
@@ -737,7 +733,7 @@ subroutine get_amat_2d(self, mol, wsc, alpha, amat, error)
    type(wignerseitz_cell), intent(in) :: wsc
    real(wp), intent(in) :: alpha
    real(wp), intent(out) :: amat(:, :)
-   type(error_type), allocatable, intent(out), optional :: error
+   type(error_type), allocatable, intent(out) :: error
 
    integer :: iat, jat, izp, jzp, img, ipair, npair, ndim, p_axes(3)
    real(wp) :: vec(3), gam, gam_min, max_rij, wsw, dtmp, rtmp, tmp, area, n_hat(3), a1(3), a2(3)
@@ -750,13 +746,9 @@ subroutine get_amat_2d(self, mol, wsc, alpha, amat, error)
    gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
    max_rij = get_max_wsc_disp(mol, wsc)
    call get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
-   if (present(error)) then
-      if (allocated(error)) return
-   end if
+   if (allocated(error)) return
    call get_ewald_rec_trans_2d(a1, a2, alpha, rtrans, area, n_hat, error=error)
-   if (present(error)) then
-      if (allocated(error)) return
-   end if
+   if (allocated(error)) return
 
    npair = mol%nat*(mol%nat+1)/2
    !$omp parallel do default(none) schedule(runtime) &
@@ -823,7 +815,7 @@ subroutine get_amat_1d(self, mol, wsc, alpha, amat, error)
    type(wignerseitz_cell), intent(in) :: wsc
    real(wp), intent(in) :: alpha
    real(wp), intent(out) :: amat(:, :)
-   type(error_type), allocatable, intent(out), optional :: error
+   type(error_type), allocatable, intent(out) :: error
 
    integer :: iat, jat, izp, jzp, img, ipair, npair, ndim, p_axes(3)
    real(wp) :: vec(3), gam, gam_min, max_rij, wsw, dtmp, rtmp, tmp
@@ -836,13 +828,9 @@ subroutine get_amat_1d(self, mol, wsc, alpha, amat, error)
    gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
    max_rij = get_max_wsc_disp(mol, wsc)
    call get_ewald_dir_trans_1d(a1, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
-   if (present(error)) then
-      if (allocated(error)) return
-   end if
+   if (allocated(error)) return
    call get_ewald_rec_trans_1d(a1, alpha, rtrans, len1, u_hat, error=error)
-   if (present(error)) then
-      if (allocated(error)) return
-   end if
+   if (allocated(error)) return
 
    npair = mol%nat*(mol%nat+1)/2
    !$omp parallel do default(none) schedule(runtime) &
@@ -916,7 +904,23 @@ subroutine get_coulomb_derivs(self, mol, cache, qvec, dadr, dadL, atrace)
 
    type(eeq_cache), pointer :: ptr
 
+   if (allocated(cache%error)) then
+      dadr = 0.0_wp
+      dadL = 0.0_wp
+      atrace = 0.0_wp
+      return
+   end if
    call view(cache, ptr)
+   if (any(mol%periodic)) then
+      if (.not. allocated(ptr%wsc%trans)) then
+         dadr = 0.0_wp
+         dadL = 0.0_wp
+         atrace = 0.0_wp
+         call fatal_error(cache%error, &
+            & "EEQ Coulomb derivatives require an initialized periodic Wigner-Seitz cell")
+         return
+      end if
+   end if
 
    select case (count(mol%periodic))
    case (3)
@@ -990,7 +994,7 @@ subroutine get_damat_3d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace, error)
    type(wignerseitz_cell), intent(in) :: wsc
    real(wp), intent(in) :: alpha, qvec(:)
    real(wp), intent(out) :: dadr(:, :, :), dadL(:, :, :), atrace(:, :)
-   type(error_type), allocatable, intent(out), optional :: error
+   type(error_type), allocatable, intent(out) :: error
 
    integer :: iat, jat, izp, jzp, img, ipair, npair
    real(wp) :: gam, gam_min, max_rij, wsw, vec(3), dG(3), dS(3, 3)
@@ -1003,13 +1007,9 @@ subroutine get_damat_3d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace, error)
    gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
    max_rij = get_max_wsc_disp(mol, wsc)
    call get_ewald_dir_trans_3d(mol%lattice, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
-   if (present(error)) then
-      if (allocated(error)) return
-   end if
+   if (allocated(error)) return
    call get_ewald_rec_trans_3d(mol%lattice, alpha, rtrans, error=error)
-   if (present(error)) then
-      if (allocated(error)) return
-   end if
+   if (allocated(error)) return
    call get_rec_weights(abs(matdet_3x3(mol%lattice)), alpha, rtrans, rec_weight, rec_strain)
 
    npair = mol%nat*(mol%nat+1)/2
@@ -1122,7 +1122,7 @@ subroutine get_damat_2d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace, error)
    type(wignerseitz_cell), intent(in) :: wsc
    real(wp), intent(in) :: alpha, qvec(:)
    real(wp), intent(out) :: dadr(:, :, :), dadL(:, :, :), atrace(:, :)
-   type(error_type), allocatable, intent(out), optional :: error
+   type(error_type), allocatable, intent(out) :: error
 
    integer :: iat, jat, izp, jzp, img, ipair, npair, ndim, p_axes(3)
    real(wp) :: gam, gam_min, max_rij, wsw, vec(3), dG(3), dS(3, 3)
@@ -1139,13 +1139,9 @@ subroutine get_damat_2d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace, error)
    gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
    max_rij = get_max_wsc_disp(mol, wsc)
    call get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
-   if (present(error)) then
-      if (allocated(error)) return
-   end if
+   if (allocated(error)) return
    call get_ewald_rec_trans_2d(a1, a2, alpha, rtrans, area, n_hat, error=error)
-   if (present(error)) then
-      if (allocated(error)) return
-   end if
+   if (allocated(error)) return
 
    npair = mol%nat*(mol%nat+1)/2
    !$omp parallel default(none) &
@@ -1250,7 +1246,7 @@ subroutine get_damat_1d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace, error)
    type(wignerseitz_cell), intent(in) :: wsc
    real(wp), intent(in) :: alpha, qvec(:)
    real(wp), intent(out) :: dadr(:, :, :), dadL(:, :, :), atrace(:, :)
-   type(error_type), allocatable, intent(out), optional :: error
+   type(error_type), allocatable, intent(out) :: error
 
    integer :: iat, jat, izp, jzp, img, ipair, npair, ndim, p_axes(3)
    real(wp) :: gam, gam_min, max_rij, wsw, vec(3), dG(3), dS(3, 3)
@@ -1266,13 +1262,9 @@ subroutine get_damat_1d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace, error)
    gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
    max_rij = get_max_wsc_disp(mol, wsc)
    call get_ewald_dir_trans_1d(a1, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
-   if (present(error)) then
-      if (allocated(error)) return
-   end if
+   if (allocated(error)) return
    call get_ewald_rec_trans_1d(a1, alpha, rtrans, len1, u_hat, error=error)
-   if (present(error)) then
-      if (allocated(error)) return
-   end if
+   if (allocated(error)) return
 
    npair = mol%nat*(mol%nat+1)/2
    !$omp parallel default(none) &

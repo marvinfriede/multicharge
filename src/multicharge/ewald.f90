@@ -13,6 +13,17 @@
 ! See the License for the specific language governing permissions and
 ! limitations under the License.
 
+!> Ewald summation utilities for 1D, 2D, and 3D periodic boundary conditions.
+!>
+!> The 1D and 2D Ewald decompositions follow:
+!> - F. Nestler and D. Potts, *Fast Ewald summation under 2d- and 1d-periodic
+!>   boundary conditions based on NFFTs*, Proc. Sampling Theory and Applications
+!>   (SampTA), 329-332 (2013).
+!> - F. Nestler, M. Pippig, and D. Potts, *Fast Ewald summation based on NFFT with
+!>   mixed periodicity*, J. Comput. Phys. **285**, 280-315 (2015),
+!>   DOI: 10.1016/j.jcp.2014.12.052.
+!> This implementation uses their 1D and 2D Ewald formulations by direct lattice
+!> summation rather than NFFT acceleration.
 module multicharge_ewald
    use mctc_cutoff, only: get_lattice_points
    use mctc_env, only: error_type, fatal_error, i8, wp
@@ -198,7 +209,6 @@ subroutine get_ewald_dir_trans_3d(lattice, alpha, gam_min, trans, max_rij, &
             call fatal_error(error, &
                & "3D Ewald direct-space summation exceeds maximum translation limit")
          end if
-         allocate(trans(3, 0))
          return
       end if
       rep_i8(k) = max(2_i8, ceiling(r_dir * norm2(inv_lat(:, k)), kind=i8))
@@ -208,13 +218,12 @@ subroutine get_ewald_dir_trans_3d(lattice, alpha, gam_min, trans, max_rij, &
             call fatal_error(error, &
                & "3D Ewald direct-space summation exceeds maximum translation limit")
          end if
-         allocate(trans(3, 0))
          return
       end if
    end do
 
    rep = int(rep_i8)
-   call get_lattice_points(red_lat, rep, .true., trans, error=error, max_trans=limit_i8)
+   call get_lattice_points(red_lat, rep, .true., trans, error=error)
 
 end subroutine get_ewald_dir_trans_3d
 
@@ -264,7 +273,6 @@ subroutine get_ewald_rec_trans_3d(lattice, alpha, trans, tol, max_trans, error)
             call fatal_error(error, &
                & "3D Ewald reciprocal-space summation exceeds maximum translation limit")
          end if
-         allocate(trans(3, 0))
          return
       end if
       rep_i8(k) = max(2_i8, ceiling(gcut * norm2(red_lat(:, k)) / twopi, kind=i8))
@@ -274,13 +282,12 @@ subroutine get_ewald_rec_trans_3d(lattice, alpha, trans, tol, max_trans, error)
             call fatal_error(error, &
                & "3D Ewald reciprocal-space summation exceeds maximum translation limit")
          end if
-         allocate(trans(3, 0))
          return
       end if
    end do
 
    rep = int(rep_i8)
-   call get_lattice_points(rec_lat, rep, .false., trans, error=error, max_trans=limit_i8)
+   call get_lattice_points(rec_lat, rep, .false., trans, error=error)
 
 end subroutine get_ewald_rec_trans_3d
 
@@ -542,7 +549,6 @@ subroutine get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, trans, max_rij, &
          call fatal_error(error, &
             & "2D Ewald direct-space summation exceeds maximum translation limit")
       end if
-      allocate(trans(3, 0))
       return
    end if
 
@@ -554,7 +560,6 @@ subroutine get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, trans, max_rij, &
          call fatal_error(error, &
             & "2D Ewald direct-space summation exceeds maximum translation limit")
       end if
-      allocate(trans(3, 0))
       return
    end if
 
@@ -563,7 +568,7 @@ subroutine get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, trans, max_rij, &
    lat2d = 0.0_wp
    lat2d(:, 1) = u1
    lat2d(:, 2) = u2
-   call get_lattice_points(lat2d, [rep1, rep2, 0], .true., trans, error=error, max_trans=limit_i8)
+   call get_lattice_points(lat2d, [rep1, rep2, 0], .true., trans, error=error)
 
 end subroutine get_ewald_dir_trans_2d
 
@@ -629,7 +634,6 @@ subroutine get_ewald_rec_trans_2d(a1, a2, alpha, trans, area, n_hat, &
          call fatal_error(error, &
             & "2D Ewald reciprocal-space summation exceeds maximum translation limit")
       end if
-      allocate(trans(3, 0))
       return
    end if
 
@@ -641,7 +645,6 @@ subroutine get_ewald_rec_trans_2d(a1, a2, alpha, trans, area, n_hat, &
          call fatal_error(error, &
             & "2D Ewald reciprocal-space summation exceeds maximum translation limit")
       end if
-      allocate(trans(3, 0))
       return
    end if
 
@@ -650,7 +653,7 @@ subroutine get_ewald_rec_trans_2d(a1, a2, alpha, trans, area, n_hat, &
    rec2d = 0.0_wp
    rec2d(:, 1) = b1
    rec2d(:, 2) = b2
-   call get_lattice_points(rec2d, [rep1, rep2, 0], .false., trans, error=error, max_trans=limit_i8)
+   call get_lattice_points(rec2d, [rep1, rep2, 0], .false., trans, error=error)
 
 end subroutine get_ewald_rec_trans_2d
 
@@ -704,7 +707,6 @@ subroutine get_ewald_dir_trans_1d(a1, alpha, gam_min, trans, max_rij, &
          call fatal_error(error, &
             & "1D Ewald direct-space summation exceeds maximum translation limit")
       end if
-      allocate(trans(3, 0))
       return
    end if
 
@@ -715,14 +717,13 @@ subroutine get_ewald_dir_trans_1d(a1, alpha, gam_min, trans, max_rij, &
          call fatal_error(error, &
             & "1D Ewald direct-space summation exceeds maximum translation limit")
       end if
-      allocate(trans(3, 0))
       return
    end if
 
    rep1 = int(rep1_i8)
    lat1d = 0.0_wp
    lat1d(:, 1) = a1
-   call get_lattice_points(lat1d, [rep1, 0, 0], .true., trans, error=error, max_trans=limit_i8)
+   call get_lattice_points(lat1d, [rep1, 0, 0], .true., trans, error=error)
 
 end subroutine get_ewald_dir_trans_1d
 
@@ -773,7 +774,6 @@ subroutine get_ewald_rec_trans_1d(a1, alpha, trans, len1, u_hat, &
          call fatal_error(error, &
             & "1D Ewald reciprocal-space summation exceeds maximum translation limit")
       end if
-      allocate(trans(3, 0))
       return
    end if
 
@@ -784,14 +784,13 @@ subroutine get_ewald_rec_trans_1d(a1, alpha, trans, len1, u_hat, &
          call fatal_error(error, &
             & "1D Ewald reciprocal-space summation exceeds maximum translation limit")
       end if
-      allocate(trans(3, 0))
       return
    end if
 
    rep1 = int(rep1_i8)
    lat1d = 0.0_wp
    lat1d(:, 1) = b1
-   call get_lattice_points(lat1d, [rep1, 0, 0], .false., trans, error=error, max_trans=limit_i8)
+   call get_lattice_points(lat1d, [rep1, 0, 0], .false., trans, error=error)
 
 end subroutine get_ewald_rec_trans_1d
 
