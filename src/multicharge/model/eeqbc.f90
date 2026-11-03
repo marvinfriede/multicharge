@@ -638,7 +638,7 @@ subroutine add_model_hessian(self, mol, error, cache, adj, hessian)
       if (allocated(error)) return
 
       call get_lattice_points(mol_wrapped%periodic, mol_wrapped%lattice, self%ncoord%cutoff, &
-         & cn_trans, error=error)
+         & cn_trans, error)
       if (allocated(error)) return
    case default
       allocate(dtrans(3, 1), source=0.0_wp)
@@ -1381,9 +1381,8 @@ subroutine get_cmat_3d(self, mol, wsc, cmat, error)
    type(structure_type), intent(in) :: mol
    type(wignerseitz_cell), intent(in) :: wsc
    real(wp), intent(out) :: cmat(:, :)
-   type(error_type), allocatable, intent(out), optional :: error
+   type(error_type), allocatable, intent(out) :: error
 
-   type(error_type), allocatable :: local_error
    integer :: iat, jat, izp, jzp, img
    real(wp) :: vec(3), rvdw, tmp, capi, capj, wsw
    real(wp), allocatable :: dtrans(:, :)
@@ -1392,11 +1391,8 @@ subroutine get_cmat_3d(self, mol, wsc, cmat, error)
    real(wp), allocatable :: cmat_local(:, :)
 
    cmat(:, :) = 0.0_wp
-   call get_eeqbc_dir_trans(self, mol, wsc, dtrans, local_error)
-   if (allocated(local_error)) then
-      if (present(error)) call move_alloc(local_error, error)
-      return
-   end if
+   call get_eeqbc_dir_trans(self, mol, wsc, dtrans, error)
+   if (allocated(error)) return
 
    !$omp parallel default(none) &
    !$omp shared(cmat, mol, self, wsc, dtrans) &
@@ -1565,9 +1561,8 @@ subroutine get_dcmat_3d(self, mol, wsc, dcdr, dcdL, error)
    type(wignerseitz_cell), intent(in) :: wsc
    real(wp), intent(out) :: dcdr(:, :, :)
    real(wp), intent(out) :: dcdL(:, :, :)
-   type(error_type), allocatable, intent(out), optional :: error
+   type(error_type), allocatable, intent(out) :: error
 
-   type(error_type), allocatable :: local_error
    integer :: iat, jat, izp, jzp, img
    real(wp) :: vec(3), rvdw, dG(3), dS(3, 3), capi, capj, wsw
    real(wp), allocatable :: dtrans(:, :)
@@ -1577,11 +1572,8 @@ subroutine get_dcmat_3d(self, mol, wsc, dcdr, dcdL, error)
 
    dcdr(:, :, :) = 0.0_wp
    dcdL(:, :, :) = 0.0_wp
-   call get_eeqbc_dir_trans(self, mol, wsc, dtrans, local_error)
-   if (allocated(local_error)) then
-      if (present(error)) call move_alloc(local_error, error)
-      return
-   end if
+   call get_eeqbc_dir_trans(self, mol, wsc, dtrans, error)
+   if (allocated(error)) return
 
    !$omp parallel default(none) &
    !$omp shared(dcdr, dcdL, mol, self, dtrans, wsc) &
@@ -1694,9 +1686,9 @@ subroutine get_eeqbc_dir_trans(self, mol, wsc, dtrans, error)
       end do
       kbc_eff = max(self%kbc, 1.0e-3_wp)
       rcut = max(self%ncoord%cutoff, rvdw_max * (1.0_wp + erf_tail / kbc_eff) + r_disp)
-      call get_lattice_points(mol%periodic, mol%lattice, rcut, dtrans, error=error)
+      call get_lattice_points(mol%periodic, mol%lattice, rcut, dtrans, error)
    case (3)
-      call get_lattice_points(mol%periodic, mol%lattice, self%ncoord%cutoff, dtrans, error=error)
+      call get_lattice_points(mol%periodic, mol%lattice, self%ncoord%cutoff, dtrans, error)
    case default
       allocate(dtrans(3, 1), source=0.0_wp)
    end select

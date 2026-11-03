@@ -265,7 +265,7 @@ subroutine add_model_hessian(self, mol, error, cache, adj, hessian)
    mol_wrapped = mol
    call wrap_to_central_cell(mol_wrapped%xyz, mol_wrapped%lattice, mol_wrapped%periodic)
    call get_lattice_points(mol_wrapped%periodic, mol_wrapped%lattice, self%ncoord%cutoff, &
-      & trans, error=error)
+      & trans, error)
    if (allocated(error)) return
 
    call self%ncoord%add_coordination_number_hessian(mol_wrapped, trans, dEdcn, hessian)
@@ -330,9 +330,9 @@ subroutine add_periodic_hessian(self, mol, wsc, alpha, qvec, adj, hessian, diago
 
    gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
    max_rij = get_max_wsc_disp(mol, wsc)
-   call get_ewald_dir_trans_3d(mol%lattice, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
+   call get_ewald_dir_trans_3d(mol%lattice, alpha, gam_min, dtrans, error, max_rij=max_rij)
    if (allocated(error)) return
-   call get_ewald_rec_trans_3d(mol%lattice, alpha, rtrans, error=error)
+   call get_ewald_rec_trans_3d(mol%lattice, alpha, rtrans, error)
    if (allocated(error)) return
    call get_rec_weights(abs(matdet_3x3(mol%lattice)), alpha, rtrans, rec_weight)
 
@@ -397,9 +397,9 @@ subroutine add_periodic_hessian_2d(self, mol, wsc, alpha, qvec, adj, hessian, di
    a2 = mol%lattice(:, p_axes(2))
    gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
    max_rij = get_max_wsc_disp(mol, wsc)
-   call get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
+   call get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, dtrans, error, max_rij=max_rij)
    if (allocated(error)) return
-   call get_ewald_rec_trans_2d(a1, a2, alpha, rtrans, area, n_hat, error=error)
+   call get_ewald_rec_trans_2d(a1, a2, alpha, rtrans, area, n_hat, error)
    if (allocated(error)) return
    nn_mat = outerprod(n_hat, n_hat)
 
@@ -484,9 +484,9 @@ subroutine add_periodic_hessian_1d(self, mol, wsc, alpha, qvec, adj, hessian, di
    a1 = mol%lattice(:, p_axes(1))
    gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
    max_rij = get_max_wsc_disp(mol, wsc)
-   call get_ewald_dir_trans_1d(a1, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
+   call get_ewald_dir_trans_1d(a1, alpha, gam_min, dtrans, error, max_rij=max_rij)
    if (allocated(error)) return
-   call get_ewald_rec_trans_1d(a1, alpha, rtrans, len1, u_hat, error=error)
+   call get_ewald_rec_trans_1d(a1, alpha, rtrans, len1, u_hat, error)
    if (allocated(error)) return
    p_par = outerprod(u_hat, u_hat)
    p_perp = unity - p_par
@@ -638,9 +638,9 @@ subroutine get_amat_3d(self, mol, wsc, alpha, amat, error)
    amat = 0.0_wp
    gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
    max_rij = get_max_wsc_disp(mol, wsc)
-   call get_ewald_dir_trans_3d(mol%lattice, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
+   call get_ewald_dir_trans_3d(mol%lattice, alpha, gam_min, dtrans, error, max_rij=max_rij)
    if (allocated(error)) return
-   call get_ewald_rec_trans_3d(mol%lattice, alpha, rtrans, error=error)
+   call get_ewald_rec_trans_3d(mol%lattice, alpha, rtrans, error)
    if (allocated(error)) return
    call get_rec_weights(abs(matdet_3x3(mol%lattice)), alpha, rtrans, rec_weight)
 
@@ -745,9 +745,9 @@ subroutine get_amat_2d(self, mol, wsc, alpha, amat, error)
    a2 = mol%lattice(:, p_axes(2))
    gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
    max_rij = get_max_wsc_disp(mol, wsc)
-   call get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
+   call get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, dtrans, error, max_rij=max_rij)
    if (allocated(error)) return
-   call get_ewald_rec_trans_2d(a1, a2, alpha, rtrans, area, n_hat, error=error)
+   call get_ewald_rec_trans_2d(a1, a2, alpha, rtrans, area, n_hat, error)
    if (allocated(error)) return
 
    npair = mol%nat*(mol%nat+1)/2
@@ -827,9 +827,9 @@ subroutine get_amat_1d(self, mol, wsc, alpha, amat, error)
    a1 = mol%lattice(:, p_axes(1))
    gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
    max_rij = get_max_wsc_disp(mol, wsc)
-   call get_ewald_dir_trans_1d(a1, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
+   call get_ewald_dir_trans_1d(a1, alpha, gam_min, dtrans, error, max_rij=max_rij)
    if (allocated(error)) return
-   call get_ewald_rec_trans_1d(a1, alpha, rtrans, len1, u_hat, error=error)
+   call get_ewald_rec_trans_1d(a1, alpha, rtrans, len1, u_hat, error)
    if (allocated(error)) return
 
    npair = mol%nat*(mol%nat+1)/2
@@ -1006,9 +1006,9 @@ subroutine get_damat_3d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace, error)
    dadr(:, :, :) = 0.0_wp
    gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
    max_rij = get_max_wsc_disp(mol, wsc)
-   call get_ewald_dir_trans_3d(mol%lattice, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
+   call get_ewald_dir_trans_3d(mol%lattice, alpha, gam_min, dtrans, error, max_rij=max_rij)
    if (allocated(error)) return
-   call get_ewald_rec_trans_3d(mol%lattice, alpha, rtrans, error=error)
+   call get_ewald_rec_trans_3d(mol%lattice, alpha, rtrans, error)
    if (allocated(error)) return
    call get_rec_weights(abs(matdet_3x3(mol%lattice)), alpha, rtrans, rec_weight, rec_strain)
 
@@ -1138,9 +1138,9 @@ subroutine get_damat_2d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace, error)
    a2 = mol%lattice(:, p_axes(2))
    gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
    max_rij = get_max_wsc_disp(mol, wsc)
-   call get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
+   call get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, dtrans, error, max_rij=max_rij)
    if (allocated(error)) return
-   call get_ewald_rec_trans_2d(a1, a2, alpha, rtrans, area, n_hat, error=error)
+   call get_ewald_rec_trans_2d(a1, a2, alpha, rtrans, area, n_hat, error)
    if (allocated(error)) return
 
    npair = mol%nat*(mol%nat+1)/2
@@ -1261,9 +1261,9 @@ subroutine get_damat_1d(self, mol, wsc, alpha, qvec, dadr, dadL, atrace, error)
    a1 = mol%lattice(:, p_axes(1))
    gam_min = 1.0_wp / (sqrt(2.0_wp) * maxval(self%rad(mol%id)))
    max_rij = get_max_wsc_disp(mol, wsc)
-   call get_ewald_dir_trans_1d(a1, alpha, gam_min, dtrans, max_rij=max_rij, error=error)
+   call get_ewald_dir_trans_1d(a1, alpha, gam_min, dtrans, error, max_rij=max_rij)
    if (allocated(error)) return
-   call get_ewald_rec_trans_1d(a1, alpha, rtrans, len1, u_hat, error=error)
+   call get_ewald_rec_trans_1d(a1, alpha, rtrans, len1, u_hat, error)
    if (allocated(error)) return
 
    npair = mol%nat*(mol%nat+1)/2

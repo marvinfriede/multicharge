@@ -440,7 +440,8 @@ subroutine test_small_r_kernel(error)
       if (allocated(model)) deallocate(model)
       call new_eeq2019_model(mol, model, error)
       if (allocated(error)) return
-      call get_lattice_points(mol%periodic, mol%lattice, 25.0_wp, trans)
+      call get_lattice_points(mol%periodic, mol%lattice, 25.0_wp, trans, error)
+      if (allocated(error)) return
       call model%ncoord%get_coordination_number(mol, trans, cn)
       call model%local_charge(mol, trans, qloc)
       call model%update(mol, cache, cn, qloc)

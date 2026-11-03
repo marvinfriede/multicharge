@@ -100,7 +100,7 @@ subroutine get_charges(mchrg_model, mol, error, qvec, dqdr, dqdL, cache)
    mol_wrapped = mol
    call wrap_to_central_cell(mol_wrapped%xyz, mol_wrapped%lattice, mol_wrapped%periodic)
    call get_lattice_points(mol_wrapped%periodic, mol_wrapped%lattice, mchrg_model%ncoord%cutoff, &
-      & trans, error=error)
+      & trans, error)
    if (allocated(error)) return
 
    call mchrg_model%ncoord%get_coordination_number(mol_wrapped, trans, cn, dcndr, dcndL)

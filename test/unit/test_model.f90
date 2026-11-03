@@ -1421,6 +1421,7 @@ subroutine test_eeqbc_q_mb01(error)
    call new_eeqbc2025_model(mol, model, error)
    if (allocated(error)) return
    call gen_test(error, mol, model, qref=ref)
+   if (allocated(error)) return
 
    ! Check wrapper functions
    allocate (qvec(mol%nat), source=0.0_wp)

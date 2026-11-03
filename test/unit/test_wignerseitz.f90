@@ -69,7 +69,8 @@ subroutine test_latticepoints_0d(error)
 
    call get_structure(mol, "MB16-43", "01")
 
-   call get_lattice_points(mol%periodic, mol%lattice, thr2, trans)
+   call get_lattice_points(mol%periodic, mol%lattice, thr2, trans, error)
+   if (allocated(error)) return
 
    call check(error, size(trans, 1), 3)
    if (allocated(error)) return
@@ -77,7 +78,8 @@ subroutine test_latticepoints_0d(error)
    call check(error, size(trans, 2), 1)
    if (allocated(error)) return
 
-   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
+   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans, error)
+   if (allocated(error)) return
 
    call check(error, size(trans, 1), 3)
    if (allocated(error)) return
@@ -98,7 +100,8 @@ subroutine test_latticepoints_3d(error)
 
    call get_structure(mol, "ICE10", "ii")
 
-   call get_lattice_points(mol%periodic, mol%lattice, thr2, trans)
+   call get_lattice_points(mol%periodic, mol%lattice, thr2, trans, error)
+   if (allocated(error)) return
 
    call check(error, size(trans, 1), 3)
    if (allocated(error)) return
@@ -106,7 +109,8 @@ subroutine test_latticepoints_3d(error)
    call check(error, size(trans, 2), 27)
    if (allocated(error)) return
 
-   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
+   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans, error)
+   if (allocated(error)) return
 
    call check(error, size(trans, 1), 3)
    if (allocated(error)) return
@@ -126,7 +130,8 @@ subroutine test_wsc_0d(error)
 
    call get_structure(mol, "MB16-43", "02")
 
-   call new_wignerseitz_cell(wsc, mol)
+   call new_wignerseitz_cell(wsc, mol, error)
+   if (allocated(error)) return
 
    call check(error, size(wsc%trans, 1), 3)
    if (allocated(error)) return
@@ -146,7 +151,8 @@ subroutine test_wsc_3d(error)
 
    call get_structure(mol, "X23", "pyrazole")
 
-   call new_wignerseitz_cell(wsc, mol)
+   call new_wignerseitz_cell(wsc, mol, error)
+   if (allocated(error)) return
 
    call check(error, size(wsc%trans, 1), 3)
    if (allocated(error)) return
@@ -177,7 +183,8 @@ subroutine test_self_images(error)
       end if
       call new(mol, [8], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]), &
          & lattice=lattice, periodic=[.true., .true., .true.])
-      call new_wignerseitz_cell(wsc, mol)
+      call new_wignerseitz_cell(wsc, mol, error)
+      if (allocated(error)) return
       call check(error, wsc%nimg(1, 1), expected)
       if (allocated(error)) return
       call check(error, wsc%nimg_max, expected)
@@ -218,13 +225,15 @@ subroutine test_latticepoints_1d(error)
       mol%lattice = lat
       mol%periodic = masks(:, imask)
 
-      call get_lattice_points(mol%periodic, mol%lattice, thr2, trans1)
+      call get_lattice_points(mol%periodic, mol%lattice, thr2, trans1, error)
+      if (allocated(error)) return
       call check(error, size(trans1, 1), 3)
       if (allocated(error)) return
       call check(error, size(trans1, 2), 3)
       if (allocated(error)) return
 
-      call get_lattice_points(mol%periodic, mol%lattice, 12.0_wp, trans1)
+      call get_lattice_points(mol%periodic, mol%lattice, 12.0_wp, trans1, error)
+      if (allocated(error)) return
       ! ceiling(12.0 / 5.0) = 3 -> 2*3 + 1 = 7 points
       call check(error, size(trans1, 2), 7)
       if (allocated(error)) return
@@ -234,7 +243,8 @@ subroutine test_latticepoints_1d(error)
          if (itr /= imask) lat(:, itr) = [100.0_wp * itr, -50.0_wp, 250.0_wp]
       end do
       mol%lattice = lat
-      call get_lattice_points(mol%periodic, mol%lattice, 12.0_wp, trans2)
+      call get_lattice_points(mol%periodic, mol%lattice, 12.0_wp, trans2, error)
+      if (allocated(error)) return
       call check(error, size(trans2, 2), 7)
       if (allocated(error)) return
       if (maxval(abs(trans1 - trans2)) > thr) then
@@ -272,18 +282,21 @@ subroutine test_latticepoints_2d(error)
       mol%lattice = lat
       mol%periodic = masks(:, imask)
 
-      call get_lattice_points(mol%periodic, mol%lattice, thr2, trans1)
+      call get_lattice_points(mol%periodic, mol%lattice, thr2, trans1, error)
+      if (allocated(error)) return
       call check(error, size(trans1, 2), 9)
       if (allocated(error)) return
 
-      call get_lattice_points(mol%periodic, mol%lattice, 11.0_wp, trans1)
+      call get_lattice_points(mol%periodic, mol%lattice, 11.0_wp, trans1, error)
+      if (allocated(error)) return
       ! rep1 = ceiling(11/5) = 3 (7), rep2 = ceiling(11/6) = 2 (5) -> 35
       call check(error, size(trans1, 2), 35)
       if (allocated(error)) return
 
       lat(:, np) = [42.0_wp, -99.0_wp, 500.0_wp]
       mol%lattice = lat
-      call get_lattice_points(mol%periodic, mol%lattice, 11.0_wp, trans2)
+      call get_lattice_points(mol%periodic, mol%lattice, 11.0_wp, trans2, error)
+      if (allocated(error)) return
       if (maxval(abs(trans1 - trans2)) > thr) then
          call test_failed(error, "2D lattice points depend on nonperiodic lattice vector")
          return
@@ -311,7 +324,8 @@ subroutine test_wsc_1d(error)
          & 1.5_wp, 2.0_wp, 1.2_wp], [3, 2]))
       mol%lattice = lat
       mol%periodic = masks(:, imask)
-      call new_wignerseitz_cell(wsc, mol)
+      call new_wignerseitz_cell(wsc, mol, error)
+      if (allocated(error)) return
       call check(error, size(wsc%trans, 2), 3)
       if (allocated(error)) return
       ! Atom 1 has 2 closest self images (+a and -a)
@@ -351,7 +365,8 @@ subroutine test_wsc_2d(error)
       & 0.0_wp, 0.0_wp, 5.2_wp], [3, 3])
    call new(mol, [8], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]), &
       & lattice=lat, periodic=[.false., .true., .true.])
-   call new_wignerseitz_cell(wsc, mol)
+   call new_wignerseitz_cell(wsc, mol, error)
+   if (allocated(error)) return
    call check(error, size(wsc%trans, 2), 9)
    if (allocated(error)) return
    call check(error, wsc%nimg(1, 1), 4)
@@ -394,8 +409,10 @@ subroutine test_wsc_robustness_1d_2d(error)
 
    call new(mol_ref, [6, 8, 1], xyz_ref, lattice=lat_ref, periodic=[.false., .true., .false.])
    call new(mol_test, [6, 8, 1], xyz_test, lattice=lat_ref, periodic=[.false., .true., .false.])
-   call new_wignerseitz_cell(wsc_ref, mol_ref)
-   call new_wignerseitz_cell(wsc_test, mol_test)
+   call new_wignerseitz_cell(wsc_ref, mol_ref, error)
+   if (allocated(error)) return
+   call new_wignerseitz_cell(wsc_test, mol_test, error)
+   if (allocated(error)) return
 
    do iat = 1, 3
       do jat = 1, 3
@@ -436,8 +453,10 @@ subroutine test_wsc_robustness_1d_2d(error)
 
    call new(mol_ref, [6, 8, 1], xyz_ref, lattice=lat_ref, periodic=[.true., .false., .true.])
    call new(mol_test, [6, 8, 1], xyz_test, lattice=lat_test, periodic=[.true., .false., .true.])
-   call new_wignerseitz_cell(wsc_ref, mol_ref)
-   call new_wignerseitz_cell(wsc_test, mol_test)
+   call new_wignerseitz_cell(wsc_ref, mol_ref, error)
+   if (allocated(error)) return
+   call new_wignerseitz_cell(wsc_test, mol_test, error)
+   if (allocated(error)) return
 
    do iat = 1, 3
       do jat = 1, 3
@@ -466,7 +485,8 @@ subroutine test_wsc_robustness_1d_2d(error)
       & 0.0_wp, 0.0_wp, 0.0_wp, &
       & 3.0_wp, 3.0_wp, 0.4_wp], [3, 2]), &
       & lattice=lat_ref, periodic=[.true., .true., .false.])
-   call new_wignerseitz_cell(wsc_ref, mol_ref)
+   call new_wignerseitz_cell(wsc_ref, mol_ref, error)
+   if (allocated(error)) return
    call check(error, wsc_ref%nimg(2, 1), 4)
    if (allocated(error)) return
 
@@ -475,7 +495,8 @@ subroutine test_wsc_robustness_1d_2d(error)
       & 0.0_wp, 0.0_wp, 0.0_wp, &
       & 3.0_wp + 0.03_wp, 3.0_wp - 0.03_wp, 0.4_wp], [3, 2]), &
       & lattice=lat_ref, periodic=[.true., .true., .false.])
-   call new_wignerseitz_cell(wsc_test, mol_test)
+   call new_wignerseitz_cell(wsc_test, mol_test, error)
+   if (allocated(error)) return
    call check(error, wsc_test%nimg(2, 1), 1)
    if (allocated(error)) return
    v_test = mol_test%xyz(:, 2) - mol_test%xyz(:, 1) &
@@ -506,7 +527,8 @@ subroutine test_wsc_65deg_counterexample(error)
    xyz(:, 2) = 1.39_wp * (lattice(:, 1) + lattice(:, 2))
 
    call new(mol, [6, 8], xyz, lattice=lattice, periodic=[.true., .true., .false.])
-   call new_wignerseitz_cell(wsc, mol)
+   call new_wignerseitz_cell(wsc, mol, error)
+   if (allocated(error)) return
 
    call check(error, wsc%nimg(1, 2), 2)
    if (allocated(error)) return
@@ -550,7 +572,7 @@ subroutine test_wsc_3d_skewed_counterexample(error)
    xyz(:, 2) = 0.5_wp * lattice(:, 2)
 
    call new(mol, [6, 8], xyz, lattice=lattice, periodic=[.true., .true., .true.])
-   call new_wignerseitz_cell(wsc, mol, error=error)
+   call new_wignerseitz_cell(wsc, mol, error)
    if (allocated(error)) return
 
    call check(error, wsc%nimg(1, 2), 4)
@@ -593,12 +615,11 @@ subroutine test_wsc_resource_limits(error)
    xyz(:, 2) = 1.0e5_wp * lattice(:, 1) + [1.2_wp, 0.0_wp, 0.0_wp]
    call new(mol, [6, 8], xyz, lattice=lattice, periodic=[.true., .false., .false.])
 
-   call new_wignerseitz_cell(wsc, mol, error=call_err)
+   call new_wignerseitz_cell(wsc, mol, call_err)
    if (.not. allocated(call_err) .or. allocated(wsc%trans)) then
       call test_failed(error, "1D resource limit did not fail cleanly in new_wignerseitz_cell")
       return
    end if
-   deallocate(call_err)
 
    call new_eeq2019_model(mol, model_eeq, error)
    if (allocated(error)) return
@@ -607,7 +628,6 @@ subroutine test_wsc_resource_limits(error)
       call test_failed(error, "1D WSC resource limit was not propagated by EEQ get_charges")
       return
    end if
-   deallocate(call_err)
 
    call new_eeqbc2025_model(mol, model_eeqbc, error)
    if (allocated(error)) return
@@ -616,7 +636,6 @@ subroutine test_wsc_resource_limits(error)
       call test_failed(error, "1D WSC resource limit was not propagated by EEQBC get_charges")
       return
    end if
-   deallocate(call_err)
 
    ! 2. 2D resource-limit regression (> 100,000 candidate translations)
    lattice = 0.0_wp
@@ -627,45 +646,40 @@ subroutine test_wsc_resource_limits(error)
       & + [1.2_wp, 1.3_wp, 0.0_wp]
    call new(mol, [6, 8], xyz, lattice=lattice, periodic=[.true., .true., .false.])
 
-   call new_wignerseitz_cell(wsc, mol, error=call_err)
+   call new_wignerseitz_cell(wsc, mol, call_err)
    if (.not. allocated(call_err) .or. allocated(wsc%trans)) then
       call test_failed(error, "2D resource limit did not fail cleanly in new_wignerseitz_cell")
       return
    end if
-   deallocate(call_err)
 
    call get_charges(model_eeq, mol, call_err, qvec)
    if (.not. allocated(call_err)) then
       call test_failed(error, "2D WSC resource limit was not propagated by EEQ get_charges")
       return
    end if
-   deallocate(call_err)
 
    call get_charges(model_eeqbc, mol, call_err, qvec)
    if (.not. allocated(call_err)) then
       call test_failed(error, "2D WSC resource limit was not propagated by EEQBC get_charges")
       return
    end if
-   deallocate(call_err)
 
    ! 3. Lattice point enumeration overflow (rep = [650, 650, 650]) and resource limit
    lattice = 0.0_wp
    lattice(1, 1) = 5.0_wp
    lattice(2, 2) = 5.0_wp
    lattice(3, 3) = 5.0_wp
-   call get_lattice_points(lattice, [650, 650, 650], .true., trans, error=call_err)
+   call get_lattice_points(lattice, [650, 650, 650], .true., trans, call_err)
    if (.not. allocated(call_err) .or. allocated(trans)) then
       call test_failed(error, "rep = [650, 650, 650] did not fail cleanly in get_lattice_points")
       return
    end if
-   deallocate(call_err)
 
-   call get_lattice_points(lattice, [200, 200, 200], .true., trans, error=call_err)
+   call get_lattice_points(lattice, [200, 200, 200], .true., trans, call_err)
    if (.not. allocated(call_err) .or. allocated(trans)) then
       call test_failed(error, "rep = [200, 200, 200] did not fail cleanly in get_lattice_points")
       return
    end if
-   deallocate(call_err)
 
 end subroutine test_wsc_resource_limits
 

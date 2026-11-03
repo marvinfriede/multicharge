@@ -125,7 +125,8 @@ subroutine gen_test(error, mol, model, qref, eref)
    real(wp), allocatable :: energy(:)
    real(wp), allocatable :: qvec(:)
 
-   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
+   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans, error)
+   if (allocated(error)) return
 
    allocate(cn(mol%nat), qloc(mol%nat))
 
@@ -190,7 +191,8 @@ subroutine test_numgrad(error, mol, model)
    real(wp), allocatable :: numgrad(:, :)
    real(wp) :: er, el
 
-   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
+   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans, error)
+   if (allocated(error)) return
 
    allocate(cn(mol%nat), dcndr(3, mol%nat, mol%nat), dcndL(3, 3, mol%nat), &
       & qloc(mol%nat), dqlocdr(3, mol%nat, mol%nat), dqlocdL(3, 3, mol%nat), &
@@ -266,7 +268,8 @@ subroutine test_numsigma(error, mol, model)
    real(wp), allocatable :: lattr(:, :), xyz(:, :)
    real(wp) :: er, el, eps(3, 3), numsigma(3, 3), sigma(3, 3), lattice(3, 3)
 
-   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
+   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans, error)
+   if (allocated(error)) return
 
    allocate(cn(mol%nat), dcndr(3, mol%nat, mol%nat), dcndL(3, 3, mol%nat), &
       & qloc(mol%nat), dqlocdr(3, mol%nat, mol%nat), dqlocdL(3, 3, mol%nat), &
@@ -353,7 +356,8 @@ subroutine test_dbdr(error, mol, model)
    type(cache_container), allocatable :: cache
    allocate(cache)
 
-   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
+   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans, error)
+   if (allocated(error)) return
 
    allocate(cn(mol%nat), dcndr(3, mol%nat, mol%nat), dcndL(3, 3, mol%nat), &
       & qloc(mol%nat), dqlocdr(3, mol%nat, mol%nat), dqlocdL(3, 3, mol%nat), &
@@ -370,6 +374,10 @@ subroutine test_dbdr(error, mol, model)
          call model%ncoord%get_coordination_number(mol, trans, cn)
          call model%local_charge(mol, trans, qloc)
          call model%update(mol, cache, cn, qloc)
+         if (allocated(cache%error)) then
+            call move_alloc(cache%error, error)
+            exit lp
+         end if
          call model%get_xvec(mol, cache, xvecr)
 
          ! Left-hand side
@@ -378,17 +386,26 @@ subroutine test_dbdr(error, mol, model)
          call model%ncoord%get_coordination_number(mol, trans, cn)
          call model%local_charge(mol, trans, qloc)
          call model%update(mol, cache, cn, qloc)
+         if (allocated(cache%error)) then
+            call move_alloc(cache%error, error)
+            exit lp
+         end if
          call model%get_xvec(mol, cache, xvecl)
 
          mol%xyz(ic, iat) = mol%xyz(ic, iat) + step
          numgrad(ic, iat, :) = 0.5_wp * (xvecr(:) - xvecl(:)) / step
       end do
    end do lp
+   if (allocated(error)) return
 
    ! Analytical gradient
    call model%ncoord%get_coordination_number(mol, trans, cn, dcndr, dcndL)
    call model%local_charge(mol, trans, qloc, dqlocdr, dqlocdL)
    call model%update(mol, cache, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL)
+   if (allocated(cache%error)) then
+      call move_alloc(cache%error, error)
+      return
+   end if
    call model%get_xvec(mol, cache, xvecl) ! need to call this for xtmp in cache (eeqbc)
    call model%get_xvec_derivs(mol, cache, dbdr, dbdL)
 
@@ -434,7 +451,8 @@ subroutine test_dbdL(error, mol, model)
       & xvecr(mol%nat + 1), xvecl(mol%nat + 1), numsigma(3, 3, mol%nat + 1), &
       & dbdr(3, mol%nat, mol%nat + 1), dbdL(3, 3, mol%nat + 1), xyz(3, mol%nat))
 
-   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
+   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans, error)
+   if (allocated(error)) return
 
    numsigma = 0.0_wp
 
@@ -453,6 +471,10 @@ subroutine test_dbdL(error, mol, model)
          call model%ncoord%get_coordination_number(mol, lattr, cn)
          call model%local_charge(mol, lattr, qloc)
          call model%update(mol, cache, cn, qloc)
+         if (allocated(cache%error)) then
+            call move_alloc(cache%error, error)
+            exit lp
+         end if
          call model%get_xvec(mol, cache, xvecr)
 
          ! Left-hand side
@@ -464,6 +486,10 @@ subroutine test_dbdL(error, mol, model)
          call model%ncoord%get_coordination_number(mol, lattr, cn)
          call model%local_charge(mol, lattr, qloc)
          call model%update(mol, cache, cn, qloc)
+         if (allocated(cache%error)) then
+            call move_alloc(cache%error, error)
+            exit lp
+         end if
          call model%get_xvec(mol, cache, xvecl)
 
          eps(jc, ic) = eps(jc, ic) + step
@@ -475,11 +501,16 @@ subroutine test_dbdL(error, mol, model)
          end do
       end do
    end do lp
+   if (allocated(error)) return
 
    ! Analytical gradient
    call model%ncoord%get_coordination_number(mol, trans, cn, dcndr, dcndL)
    call model%local_charge(mol, trans, qloc, dqlocdr, dqlocdL)
    call model%update(mol, cache, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL)
+   if (allocated(cache%error)) then
+      call move_alloc(cache%error, error)
+      return
+   end if
    call model%get_xvec(mol, cache, xvecl) ! need to call this for xtmp in cache (eeqbc)
    call model%get_xvec_derivs(mol, cache, dbdr, dbdL)
 
@@ -532,7 +563,8 @@ subroutine test_dadr(error, mol, model)
       thr2_local = thr2
    end select
 
-   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
+   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans, error)
+   if (allocated(error)) return
 
    ! Obtain the vector of charges
    call model%ncoord%get_coordination_number(mol, trans, cn)
@@ -550,7 +582,15 @@ subroutine test_dadr(error, mol, model)
          call model%ncoord%get_coordination_number(mol, trans, cn)
          call model%local_charge(mol, trans, qloc)
          call model%update(mol, cache, cn, qloc)
+         if (allocated(cache%error)) then
+            call move_alloc(cache%error, error)
+            exit lp
+         end if
          call model%get_coulomb_matrix(mol, cache, amatr)
+         if (allocated(cache%error)) then
+            call move_alloc(cache%error, error)
+            exit lp
+         end if
 
          ! Left-hand side
          amatl(:, :) = 0.0_wp
@@ -558,7 +598,15 @@ subroutine test_dadr(error, mol, model)
          call model%ncoord%get_coordination_number(mol, trans, cn)
          call model%local_charge(mol, trans, qloc)
          call model%update(mol, cache, cn, qloc)
+         if (allocated(cache%error)) then
+            call move_alloc(cache%error, error)
+            exit lp
+         end if
          call model%get_coulomb_matrix(mol, cache, amatl)
+         if (allocated(cache%error)) then
+            call move_alloc(cache%error, error)
+            exit lp
+         end if
 
          mol%xyz(ic, iat) = mol%xyz(ic, iat) + step
 
@@ -571,12 +619,21 @@ subroutine test_dadr(error, mol, model)
          end do
       end do
    end do lp
+   if (allocated(error)) return
 
    ! Analytical gradient
    call model%ncoord%get_coordination_number(mol, trans, cn, dcndr, dcndL)
    call model%local_charge(mol, trans, qloc, dqlocdr, dqlocdL)
    call model%update(mol, cache, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL)
+   if (allocated(cache%error)) then
+      call move_alloc(cache%error, error)
+      return
+   end if
    call model%get_coulomb_derivs(mol, cache, qvec, dadr, dadL, atrace)
+   if (allocated(cache%error)) then
+      call move_alloc(cache%error, error)
+      return
+   end if
 
    ! Add trace of the A matrix
    do iat = 1, mol%nat
@@ -627,7 +684,8 @@ subroutine test_dadL(error, mol, model)
       & dadr(3, mol%nat, mol%nat + 1), dadL(3, 3, mol%nat + 1), atrace(3, mol%nat), &
       & numsigma(3, 3, mol%nat + 1), qvec(mol%nat), xyz(3, mol%nat))
 
-   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
+   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans, error)
+   if (allocated(error)) return
 
    call model%ncoord%get_coordination_number(mol, trans, cn)
    call model%local_charge(mol, trans, qloc)
@@ -650,8 +708,15 @@ subroutine test_dadL(error, mol, model)
          call model%ncoord%get_coordination_number(mol, lattr, cn)
          call model%local_charge(mol, lattr, qloc)
          call model%update(mol, cache, cn, qloc)
+         if (allocated(cache%error)) then
+            call move_alloc(cache%error, error)
+            exit lp
+         end if
          call model%get_coulomb_matrix(mol, cache, amatr)
-         if (allocated(error)) exit lp
+         if (allocated(cache%error)) then
+            call move_alloc(cache%error, error)
+            exit lp
+         end if
 
          amatl(:, :) = 0.0_wp
          eps(jc, ic) = eps(jc, ic) - 2 * step
@@ -661,8 +726,15 @@ subroutine test_dadL(error, mol, model)
          call model%ncoord%get_coordination_number(mol, lattr, cn)
          call model%local_charge(mol, lattr, qloc)
          call model%update(mol, cache, cn, qloc)
+         if (allocated(cache%error)) then
+            call move_alloc(cache%error, error)
+            exit lp
+         end if
          call model%get_coulomb_matrix(mol, cache, amatl)
-         if (allocated(error)) exit lp
+         if (allocated(cache%error)) then
+            call move_alloc(cache%error, error)
+            exit lp
+         end if
 
          eps(jc, ic) = eps(jc, ic) + step
          mol%xyz(:, :) = xyz
@@ -679,9 +751,16 @@ subroutine test_dadL(error, mol, model)
    call model%ncoord%get_coordination_number(mol, trans, cn, dcndr, dcndL)
    call model%local_charge(mol, trans, qloc, dqlocdr, dqlocdL)
    call model%update(mol, cache, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL)
+   if (allocated(cache%error)) then
+      call move_alloc(cache%error, error)
+      return
+   end if
 
    call model%get_coulomb_derivs(mol, cache, qvec, dadr, dadL, atrace)
-   if (allocated(error)) return
+   if (allocated(cache%error)) then
+      call move_alloc(cache%error, error)
+      return
+   end if
 
    if (any(abs(dadL(:, :, :) - numsigma(:, :, :)) > thr2)) then
       call test_failed(error, "Derivative of the A matrix does not match")
@@ -714,7 +793,8 @@ subroutine test_numdqdr(error, mol, model)
    real(wp), allocatable :: ql(:), qr(:), dqdr(:, :, :), dqdL(:, :, :)
    real(wp), allocatable :: numdr(:, :, :)
 
-   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
+   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans, error)
+   if (allocated(error)) return
 
    allocate(cn(mol%nat), dcndr(3, mol%nat, mol%nat), dcndL(3, 3, mol%nat), &
       & qloc(mol%nat), dqlocdr(3, mol%nat, mol%nat), dqlocdL(3, 3, mol%nat), &
@@ -782,7 +862,8 @@ subroutine test_numdqdL(error, mol, model)
    real(wp), allocatable :: lattr(:, :), xyz(:, :), numdL(:, :, :)
    real(wp) :: eps(3, 3), lattice(3, 3)
 
-   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans)
+   call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans, error)
+   if (allocated(error)) return
 
    allocate(cn(mol%nat), dcndr(3, mol%nat, mol%nat), dcndL(3, 3, mol%nat), &
       & qloc(mol%nat), dqlocdr(3, mol%nat, mol%nat), dqlocdL(3, 3, mol%nat), &
@@ -1565,7 +1646,7 @@ subroutine test_ewald_convergence_1d_2d(error)
 
    ! 1. Verify removal of hard caps (>40 in 1D, >20 per axis in 2D)
    a1 = [2.0_wp, 0.0_wp, 0.0_wp]
-   call get_ewald_dir_trans_1d(a1, 0.06_wp, 0.06_wp, dtrans, error=error)
+   call get_ewald_dir_trans_1d(a1, 0.06_wp, 0.06_wp, dtrans, error)
    if (allocated(error)) return
    if (size(dtrans, 2) <= 81) then
       call test_failed(error, "1D direct-space Ewald remains capped at 40 shells")
@@ -1573,7 +1654,7 @@ subroutine test_ewald_convergence_1d_2d(error)
    end if
 
    a1 = [45.0_wp, 0.0_wp, 0.0_wp]
-   call get_ewald_rec_trans_1d(a1, 0.50_wp, rtrans, len1, u_hat, error=error)
+   call get_ewald_rec_trans_1d(a1, 0.50_wp, rtrans, len1, u_hat, error)
    if (allocated(error)) return
    if (size(rtrans, 2) <= 80) then
       call test_failed(error, "1D reciprocal-space Ewald remains capped at 40 shells")
@@ -1582,7 +1663,7 @@ subroutine test_ewald_convergence_1d_2d(error)
 
    a1 = [3.0_wp, 0.0_wp, 0.0_wp]
    a2 = [0.0_wp, 3.0_wp, 0.0_wp]
-   call get_ewald_dir_trans_2d(a1, a2, 0.08_wp, 0.08_wp, dtrans, error=error)
+   call get_ewald_dir_trans_2d(a1, a2, 0.08_wp, 0.08_wp, dtrans, error)
    if (allocated(error)) return
    if (size(dtrans, 2) <= 1681) then
       call test_failed(error, "2D direct-space Ewald remains capped at 20 shells")
@@ -1591,7 +1672,7 @@ subroutine test_ewald_convergence_1d_2d(error)
 
    a1 = [30.0_wp, 0.0_wp, 0.0_wp]
    a2 = [0.0_wp, 30.0_wp, 0.0_wp]
-   call get_ewald_rec_trans_2d(a1, a2, 0.45_wp, rtrans, area, n_hat, error=error)
+   call get_ewald_rec_trans_2d(a1, a2, 0.45_wp, rtrans, area, n_hat, error)
    if (allocated(error)) return
    if (size(rtrans, 2) <= 1680) then
       call test_failed(error, "2D reciprocal-space Ewald remains capped at 20 shells")
@@ -1600,52 +1681,46 @@ subroutine test_ewald_convergence_1d_2d(error)
 
    ! 2. Verify explicit resource-limit error reporting (no silent truncation)
    call get_ewald_dir_trans_1d([2.0_wp, 0.0_wp, 0.0_wp], 0.06_wp, 0.06_wp, dtrans, &
-      & max_trans=10, error=expected)
+      & expected, max_trans=10)
    if (.not. allocated(expected)) then
       call test_failed(error, "1D direct-space resource limit was not enforced")
       return
    end if
-   deallocate(expected)
 
    call get_ewald_rec_trans_1d([45.0_wp, 0.0_wp, 0.0_wp], 0.50_wp, rtrans, len1, u_hat, &
-      & max_trans=10, error=expected)
+      & expected, max_trans=10)
    if (.not. allocated(expected)) then
       call test_failed(error, "1D reciprocal-space resource limit was not enforced")
       return
    end if
-   deallocate(expected)
 
    call get_ewald_dir_trans_2d([3.0_wp, 0.0_wp, 0.0_wp], [0.0_wp, 3.0_wp, 0.0_wp], &
-      & 0.08_wp, 0.08_wp, dtrans, max_trans=10, error=expected)
+      & 0.08_wp, 0.08_wp, dtrans, expected, max_trans=10)
    if (.not. allocated(expected)) then
       call test_failed(error, "2D direct-space resource limit was not enforced")
       return
    end if
-   deallocate(expected)
 
    call get_ewald_rec_trans_2d([30.0_wp, 0.0_wp, 0.0_wp], [0.0_wp, 30.0_wp, 0.0_wp], &
-      & 0.45_wp, rtrans, area, n_hat, max_trans=10, error=expected)
+      & 0.45_wp, rtrans, area, n_hat, expected, max_trans=10)
    if (.not. allocated(expected)) then
       call test_failed(error, "2D reciprocal-space resource limit was not enforced")
       return
    end if
-   deallocate(expected)
 
    call get_ewald_dir_trans_3d(reshape([3.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 3.0_wp, 0.0_wp, &
-      & 0.0_wp, 0.0_wp, 3.0_wp], [3, 3]), 0.08_wp, 0.08_wp, dtrans, max_trans=10, error=expected)
+      & 0.0_wp, 0.0_wp, 3.0_wp], [3, 3]), 0.08_wp, 0.08_wp, dtrans, expected, max_trans=10)
    if (.not. allocated(expected)) then
       call test_failed(error, "3D direct-space resource limit was not enforced")
       return
    end if
-   deallocate(expected)
 
    call get_ewald_rec_trans_3d(reshape([30.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 30.0_wp, 0.0_wp, &
-      & 0.0_wp, 0.0_wp, 30.0_wp], [3, 3]), 0.45_wp, rtrans, max_trans=10, error=expected)
+      & 0.0_wp, 0.0_wp, 30.0_wp], [3, 3]), 0.45_wp, rtrans, expected, max_trans=10)
    if (.not. allocated(expected)) then
       call test_failed(error, "3D reciprocal-space resource limit was not enforced")
       return
    end if
-   deallocate(expected)
 
    ! Public get_charges API must propagate resource-limit errors cleanly when
    ! an extreme aspect-ratio 2D cell requires > 200,000 translations
@@ -1726,10 +1801,15 @@ subroutine test_ewald_convergence_1d_2d(error)
          model%rad = 2.2_wp * model%rad
       end if
 
-      call get_lattice_points(mol%periodic, mol%lattice, 25.0_wp, trans)
+      call get_lattice_points(mol%periodic, mol%lattice, 25.0_wp, trans, error)
+      if (allocated(error)) return
       call model%ncoord%get_coordination_number(mol, trans, cn)
       call model%local_charge(mol, trans, qloc)
       call model%update(mol, cache, cn, qloc)
+      if (allocated(cache%error)) then
+         call move_alloc(cache%error, error)
+         return
+      end if
       allocate(cache%qvec(4), source=qvec)
       select type (raw => cache%raw)
       type is (eeq_cache)
@@ -1959,7 +2039,8 @@ subroutine test_pbc_wsc_invariance_1d_2d(error)
    if (allocated(error)) return
 
    ! Direct model%solve on unwrapped 65-degree counterexample (mol_p) using CN/qloc from mol_0
-   call get_lattice_points(mol_0%periodic, mol_0%lattice, model%ncoord%cutoff, trans)
+   call get_lattice_points(mol_0%periodic, mol_0%lattice, model%ncoord%cutoff, trans, error)
+   if (allocated(error)) return
    call model%ncoord%get_coordination_number(mol_0, trans, cn2, dcndr2, dcndL2)
    call model%local_charge(mol_0, trans, qloc2, dqlocdr2, dqlocdL2)
    call model%solve(mol_p, error, cn2, qloc2, dcndr2, dcndL2, dqlocdr2, dqlocdL2, &
@@ -2712,7 +2793,8 @@ subroutine test_eeq_3d_slab_285(error)
       x_ang = 2.0_wp + real(7939 + ix, wp) / 10000.0_wp
       lat(:, 1) = [x_ang, 0.0_wp, 0.0_wp] * aa2au
       call new(mol3d, [8, 1, 1], xyz, lattice=lat, periodic=[.true., .true., .true.])
-      call get_lattice_points(mol3d%periodic, mol3d%lattice, model%ncoord%cutoff, trans)
+      call get_lattice_points(mol3d%periodic, mol3d%lattice, model%ncoord%cutoff, trans, error)
+      if (allocated(error)) return
       call model%ncoord%get_coordination_number(mol3d, trans, cn)
       call model%local_charge(mol3d, trans, qloc)
       e_scan(:, ix) = 0.0_wp

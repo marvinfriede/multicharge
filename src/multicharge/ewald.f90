@@ -155,8 +155,8 @@ end subroutine get_alpha
 
 
 !> Generate converged direct-space lattice translations for 3D Ewald
-subroutine get_ewald_dir_trans_3d(lattice, alpha, gam_min, trans, max_rij, &
-      & tol, max_trans, error)
+subroutine get_ewald_dir_trans_3d(lattice, alpha, gam_min, trans, error, &
+      & max_rij, tol, max_trans)
    !> Real-space lattice vectors as columns (3, 3)
    real(wp), intent(in) :: lattice(:, :)
    !> Ewald splitting parameter
@@ -165,14 +165,14 @@ subroutine get_ewald_dir_trans_3d(lattice, alpha, gam_min, trans, max_rij, &
    real(wp), intent(in) :: gam_min
    !> Direct-space lattice translations (3, ntrans)
    real(wp), allocatable, intent(out) :: trans(:, :)
+   !> Error handling
+   type(error_type), allocatable, intent(out) :: error
    !> Optional maximum pair displacement within the Wigner-Seitz cell
    real(wp), intent(in), optional :: max_rij
    !> Optional target numerical accuracy threshold
    real(wp), intent(in), optional :: tol
    !> Optional resource limit on translation count
    integer, intent(in), optional :: max_trans
-   !> Optional error handling when resource limit is exceeded
-   type(error_type), allocatable, intent(out), optional :: error
 
    real(wp) :: red_lat(3, 3), inv_lat(3, 3), len_max
    real(wp) :: kappa, kappa_max, tol_val, u_cut, rcut, r_disp, r_dir
@@ -205,43 +205,39 @@ subroutine get_ewald_dir_trans_3d(lattice, alpha, gam_min, trans, max_rij, &
    ntr_i8 = 1_i8
    do k = 1, 3
       if (.not. (r_dir * norm2(inv_lat(:, k)) <= real(limit_i8, wp))) then
-         if (present(error)) then
-            call fatal_error(error, &
-               & "3D Ewald direct-space summation exceeds maximum translation limit")
-         end if
+         call fatal_error(error, &
+            & "3D Ewald direct-space summation exceeds maximum translation limit")
          return
       end if
       rep_i8(k) = max(2_i8, ceiling(r_dir * norm2(inv_lat(:, k)), kind=i8))
       ntr_i8 = ntr_i8 * (2_i8 * rep_i8(k) + 1_i8)
       if (ntr_i8 > limit_i8) then
-         if (present(error)) then
-            call fatal_error(error, &
-               & "3D Ewald direct-space summation exceeds maximum translation limit")
-         end if
+         call fatal_error(error, &
+            & "3D Ewald direct-space summation exceeds maximum translation limit")
          return
       end if
    end do
 
    rep = int(rep_i8)
-   call get_lattice_points(red_lat, rep, .true., trans, error=error)
+   call get_lattice_points(red_lat, rep, .true., trans, error)
 
 end subroutine get_ewald_dir_trans_3d
 
 
 !> Generate converged nonzero reciprocal-space lattice vectors for 3D Ewald
-subroutine get_ewald_rec_trans_3d(lattice, alpha, trans, tol, max_trans, error)
+subroutine get_ewald_rec_trans_3d(lattice, alpha, trans, error, tol, max_trans)
    !> Real-space lattice vectors as columns (3, 3)
    real(wp), intent(in) :: lattice(:, :)
    !> Ewald splitting parameter
    real(wp), intent(in) :: alpha
    !> Nonzero reciprocal lattice vectors (3, nrec)
    real(wp), allocatable, intent(out) :: trans(:, :)
+   !> Error handling
+   type(error_type), allocatable, intent(out) :: error
    !> Optional target numerical accuracy threshold
    real(wp), intent(in), optional :: tol
    !> Optional resource limit on reciprocal vector count
    integer, intent(in), optional :: max_trans
-   !> Optional error handling when resource limit is exceeded
-   type(error_type), allocatable, intent(out), optional :: error
 
    real(wp) :: red_lat(3, 3), rec_lat(3, 3), vol, rlen_min
    real(wp) :: tol_val, u_cut, gcut
@@ -269,25 +265,21 @@ subroutine get_ewald_rec_trans_3d(lattice, alpha, trans, tol, max_trans, error)
    ntr_i8 = 1_i8
    do k = 1, 3
       if (.not. (gcut * norm2(red_lat(:, k)) / twopi <= real(limit_i8, wp))) then
-         if (present(error)) then
-            call fatal_error(error, &
-               & "3D Ewald reciprocal-space summation exceeds maximum translation limit")
-         end if
+         call fatal_error(error, &
+            & "3D Ewald reciprocal-space summation exceeds maximum translation limit")
          return
       end if
       rep_i8(k) = max(2_i8, ceiling(gcut * norm2(red_lat(:, k)) / twopi, kind=i8))
       ntr_i8 = ntr_i8 * (2_i8 * rep_i8(k) + 1_i8)
       if (ntr_i8 - 1_i8 > limit_i8) then
-         if (present(error)) then
-            call fatal_error(error, &
-               & "3D Ewald reciprocal-space summation exceeds maximum translation limit")
-         end if
+         call fatal_error(error, &
+            & "3D Ewald reciprocal-space summation exceeds maximum translation limit")
          return
       end if
    end do
 
    rep = int(rep_i8)
-   call get_lattice_points(rec_lat, rep, .false., trans, error=error)
+   call get_lattice_points(rec_lat, rep, .false., trans, error)
 
 end subroutine get_ewald_rec_trans_3d
 
@@ -492,8 +484,8 @@ end function erfc_exp_2d
 
 
 !> Generate converged direct-space lattice translations for 2D Ewald
-subroutine get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, trans, max_rij, &
-      & tol, max_trans, error)
+subroutine get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, trans, error, &
+      & max_rij, tol, max_trans)
    !> First periodic lattice vector
    real(wp), intent(in) :: a1(3)
    !> Second periodic lattice vector
@@ -504,14 +496,14 @@ subroutine get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, trans, max_rij, &
    real(wp), intent(in) :: gam_min
    !> Direct-space lattice translations (3, ntrans)
    real(wp), allocatable, intent(out) :: trans(:, :)
+   !> Error handling
+   type(error_type), allocatable, intent(out) :: error
    !> Optional maximum pair displacement within the Wigner-Seitz cell
    real(wp), intent(in), optional :: max_rij
    !> Optional target numerical accuracy threshold
    real(wp), intent(in), optional :: tol
    !> Optional resource limit on translation count
    integer, intent(in), optional :: max_trans
-   !> Optional error handling when resource limit is exceeded
-   type(error_type), allocatable, intent(out), optional :: error
 
    real(wp) :: u1(3), u2(3), lat2d(3, 3)
    real(wp) :: kappa, kappa_max, tol_val, u_cut, rcut, r_disp, r_dir
@@ -545,10 +537,8 @@ subroutine get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, trans, max_rij, &
 
    if (.not. (r_dir * len2 / area <= real(limit_i8, wp) &
       & .and. r_dir * len1 / area <= real(limit_i8, wp))) then
-      if (present(error)) then
-         call fatal_error(error, &
-            & "2D Ewald direct-space summation exceeds maximum translation limit")
-      end if
+      call fatal_error(error, &
+         & "2D Ewald direct-space summation exceeds maximum translation limit")
       return
    end if
 
@@ -556,10 +546,8 @@ subroutine get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, trans, max_rij, &
    rep2_i8 = max(2_i8, ceiling(r_dir * len1 / area, kind=i8))
    ntr_i8 = (2_i8 * rep1_i8 + 1_i8) * (2_i8 * rep2_i8 + 1_i8)
    if (ntr_i8 > limit_i8) then
-      if (present(error)) then
-         call fatal_error(error, &
-            & "2D Ewald direct-space summation exceeds maximum translation limit")
-      end if
+      call fatal_error(error, &
+         & "2D Ewald direct-space summation exceeds maximum translation limit")
       return
    end if
 
@@ -568,14 +556,14 @@ subroutine get_ewald_dir_trans_2d(a1, a2, alpha, gam_min, trans, max_rij, &
    lat2d = 0.0_wp
    lat2d(:, 1) = u1
    lat2d(:, 2) = u2
-   call get_lattice_points(lat2d, [rep1, rep2, 0], .true., trans, error=error)
+   call get_lattice_points(lat2d, [rep1, rep2, 0], .true., trans, error)
 
 end subroutine get_ewald_dir_trans_2d
 
 
 !> Generate converged nonzero reciprocal-space lattice vectors for 2D Ewald
 subroutine get_ewald_rec_trans_2d(a1, a2, alpha, trans, area, n_hat, &
-      & tol, max_trans, error)
+      & error, tol, max_trans)
    !> First periodic lattice vector
    real(wp), intent(in) :: a1(3)
    !> Second periodic lattice vector
@@ -588,12 +576,12 @@ subroutine get_ewald_rec_trans_2d(a1, a2, alpha, trans, area, n_hat, &
    real(wp), intent(out) :: area
    !> Unit normal to the 2D periodic plane
    real(wp), intent(out) :: n_hat(3)
+   !> Error handling
+   type(error_type), allocatable, intent(out) :: error
    !> Optional target numerical accuracy threshold
    real(wp), intent(in), optional :: tol
    !> Optional resource limit on reciprocal vector count
    integer, intent(in), optional :: max_trans
-   !> Optional error handling when resource limit is exceeded
-   type(error_type), allocatable, intent(out), optional :: error
 
    real(wp) :: n_vec(3), u1(3), u2(3), b1(3), b2(3), rec2d(3, 3)
    real(wp) :: m11, m12, m22, g11, g22, rec_area
@@ -630,10 +618,8 @@ subroutine get_ewald_rec_trans_2d(a1, a2, alpha, trans, area, n_hat, &
 
    if (.not. (gcut * sqrt(g22) / rec_area <= real(limit_i8, wp) &
       & .and. gcut * sqrt(g11) / rec_area <= real(limit_i8, wp))) then
-      if (present(error)) then
-         call fatal_error(error, &
-            & "2D Ewald reciprocal-space summation exceeds maximum translation limit")
-      end if
+      call fatal_error(error, &
+         & "2D Ewald reciprocal-space summation exceeds maximum translation limit")
       return
    end if
 
@@ -641,10 +627,8 @@ subroutine get_ewald_rec_trans_2d(a1, a2, alpha, trans, area, n_hat, &
    rep2_i8 = max(2_i8, ceiling(gcut * sqrt(g11) / rec_area, kind=i8))
    ntr_i8 = (2_i8 * rep1_i8 + 1_i8) * (2_i8 * rep2_i8 + 1_i8) - 1_i8
    if (ntr_i8 > limit_i8) then
-      if (present(error)) then
-         call fatal_error(error, &
-            & "2D Ewald reciprocal-space summation exceeds maximum translation limit")
-      end if
+      call fatal_error(error, &
+         & "2D Ewald reciprocal-space summation exceeds maximum translation limit")
       return
    end if
 
@@ -653,14 +637,14 @@ subroutine get_ewald_rec_trans_2d(a1, a2, alpha, trans, area, n_hat, &
    rec2d = 0.0_wp
    rec2d(:, 1) = b1
    rec2d(:, 2) = b2
-   call get_lattice_points(rec2d, [rep1, rep2, 0], .false., trans, error=error)
+   call get_lattice_points(rec2d, [rep1, rep2, 0], .false., trans, error)
 
 end subroutine get_ewald_rec_trans_2d
 
 
 !> Generate converged direct-space lattice translations for 1D Ewald
-subroutine get_ewald_dir_trans_1d(a1, alpha, gam_min, trans, max_rij, &
-      & tol, max_trans, error)
+subroutine get_ewald_dir_trans_1d(a1, alpha, gam_min, trans, error, &
+      & max_rij, tol, max_trans)
    !> Periodic lattice vector
    real(wp), intent(in) :: a1(3)
    !> Ewald splitting parameter
@@ -669,14 +653,14 @@ subroutine get_ewald_dir_trans_1d(a1, alpha, gam_min, trans, max_rij, &
    real(wp), intent(in) :: gam_min
    !> Direct-space lattice translations (3, ntrans)
    real(wp), allocatable, intent(out) :: trans(:, :)
+   !> Error handling
+   type(error_type), allocatable, intent(out) :: error
    !> Optional maximum pair displacement within the Wigner-Seitz cell
    real(wp), intent(in), optional :: max_rij
    !> Optional target numerical accuracy threshold
    real(wp), intent(in), optional :: tol
    !> Optional resource limit on translation count
    integer, intent(in), optional :: max_trans
-   !> Optional error handling when resource limit is exceeded
-   type(error_type), allocatable, intent(out), optional :: error
 
    real(wp) :: lat1d(3, 3), kappa, kappa_max, tol_val, u_cut, rcut, r_disp, r_dir, len1
    integer(i8) :: rep1_i8, ntr_i8, limit_i8
@@ -703,34 +687,30 @@ subroutine get_ewald_dir_trans_1d(a1, alpha, gam_min, trans, max_rij, &
    r_dir = rcut + r_disp
 
    if (.not. (r_dir / len1 <= real(limit_i8, wp))) then
-      if (present(error)) then
-         call fatal_error(error, &
-            & "1D Ewald direct-space summation exceeds maximum translation limit")
-      end if
+      call fatal_error(error, &
+         & "1D Ewald direct-space summation exceeds maximum translation limit")
       return
    end if
 
    rep1_i8 = max(2_i8, ceiling(r_dir / len1, kind=i8))
    ntr_i8 = 2_i8 * rep1_i8 + 1_i8
    if (ntr_i8 > limit_i8) then
-      if (present(error)) then
-         call fatal_error(error, &
-            & "1D Ewald direct-space summation exceeds maximum translation limit")
-      end if
+      call fatal_error(error, &
+         & "1D Ewald direct-space summation exceeds maximum translation limit")
       return
    end if
 
    rep1 = int(rep1_i8)
    lat1d = 0.0_wp
    lat1d(:, 1) = a1
-   call get_lattice_points(lat1d, [rep1, 0, 0], .true., trans, error=error)
+   call get_lattice_points(lat1d, [rep1, 0, 0], .true., trans, error)
 
 end subroutine get_ewald_dir_trans_1d
 
 
 !> Generate converged nonzero reciprocal-space lattice vectors for 1D Ewald
 subroutine get_ewald_rec_trans_1d(a1, alpha, trans, len1, u_hat, &
-      & tol, max_trans, error)
+      & error, tol, max_trans)
    !> Periodic lattice vector
    real(wp), intent(in) :: a1(3)
    !> Ewald splitting parameter
@@ -741,12 +721,12 @@ subroutine get_ewald_rec_trans_1d(a1, alpha, trans, len1, u_hat, &
    real(wp), intent(out) :: len1
    !> Unit vector along the 1D periodic axis
    real(wp), intent(out) :: u_hat(3)
+   !> Error handling
+   type(error_type), allocatable, intent(out) :: error
    !> Optional target numerical accuracy threshold
    real(wp), intent(in), optional :: tol
    !> Optional resource limit on reciprocal vector count
    integer, intent(in), optional :: max_trans
-   !> Optional error handling when resource limit is exceeded
-   type(error_type), allocatable, intent(out), optional :: error
 
    real(wp) :: lat1d(3, 3), b1(3), tol_val, x_cut, gcut
    integer(i8) :: rep1_i8, ntr_i8, limit_i8
@@ -770,27 +750,23 @@ subroutine get_ewald_rec_trans_1d(a1, alpha, trans, len1, u_hat, &
    end do
 
    if (.not. (gcut * len1 / twopi <= real(limit_i8, wp))) then
-      if (present(error)) then
-         call fatal_error(error, &
-            & "1D Ewald reciprocal-space summation exceeds maximum translation limit")
-      end if
+      call fatal_error(error, &
+         & "1D Ewald reciprocal-space summation exceeds maximum translation limit")
       return
    end if
 
    rep1_i8 = max(2_i8, ceiling(gcut * len1 / twopi, kind=i8))
    ntr_i8 = 2_i8 * rep1_i8
    if (ntr_i8 > limit_i8) then
-      if (present(error)) then
-         call fatal_error(error, &
-            & "1D Ewald reciprocal-space summation exceeds maximum translation limit")
-      end if
+      call fatal_error(error, &
+         & "1D Ewald reciprocal-space summation exceeds maximum translation limit")
       return
    end if
 
    rep1 = int(rep1_i8)
    lat1d = 0.0_wp
    lat1d(:, 1) = b1
-   call get_lattice_points(lat1d, [rep1, 0, 0], .false., trans, error=error)
+   call get_lattice_points(lat1d, [rep1, 0, 0], .false., trans, error)
 
 end subroutine get_ewald_rec_trans_1d
 

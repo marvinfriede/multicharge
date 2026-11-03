@@ -324,22 +324,22 @@ end subroutine check_structure
 subroutine get_dir_trans(lattice, trans, error)
    real(wp), intent(in) :: lattice(:, :)
    real(wp), allocatable, intent(out) :: trans(:, :)
-   type(error_type), allocatable, intent(out), optional :: error
+   type(error_type), allocatable, intent(out) :: error
    integer, parameter :: rep(3) = [2, 2, 2]
 
-   call get_lattice_points(lattice, rep, .true., trans, error=error)
+   call get_lattice_points(lattice, rep, .true., trans, error)
 
 end subroutine get_dir_trans
 
 subroutine get_rec_trans(lattice, trans, error)
    real(wp), intent(in) :: lattice(:, :)
    real(wp), allocatable, intent(out) :: trans(:, :)
-   type(error_type), allocatable, intent(out), optional :: error
+   type(error_type), allocatable, intent(out) :: error
    integer, parameter :: rep(3) = [2, 2, 2]
    real(wp) :: rec_lat(3, 3)
 
    rec_lat = twopi * transpose(matinv_3x3(lattice))
-   call get_lattice_points(rec_lat, rep, .false., trans, error=error)
+   call get_lattice_points(rec_lat, rep, .false., trans, error)
 
 end subroutine get_rec_trans
 
