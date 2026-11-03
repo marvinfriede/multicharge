@@ -231,23 +231,25 @@ subroutine check_structure(self, mol, error)
    end select
 end subroutine check_structure
 
-subroutine get_dir_trans(lattice, trans)
+subroutine get_dir_trans(lattice, trans, error)
    real(wp), intent(in) :: lattice(:, :)
    real(wp), allocatable, intent(out) :: trans(:, :)
+   type(error_type), allocatable, intent(out), optional :: error
    integer, parameter :: rep(3) = [2, 2, 2]
 
-   call get_lattice_points(lattice, rep, .true., trans)
+   call get_lattice_points(lattice, rep, .true., trans, error=error)
 
 end subroutine get_dir_trans
 
-subroutine get_rec_trans(lattice, trans)
+subroutine get_rec_trans(lattice, trans, error)
    real(wp), intent(in) :: lattice(:, :)
    real(wp), allocatable, intent(out) :: trans(:, :)
+   type(error_type), allocatable, intent(out), optional :: error
    integer, parameter :: rep(3) = [2, 2, 2]
    real(wp) :: rec_lat(3, 3)
 
    rec_lat = twopi * transpose(matinv_3x3(lattice))
-   call get_lattice_points(rec_lat, rep, .false., trans)
+   call get_lattice_points(rec_lat, rep, .false., trans, error=error)
 
 end subroutine get_rec_trans
 
@@ -342,6 +344,10 @@ subroutine solve(self, mol, error, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL, &
    ! Get RHS of ES equation
    allocate(xvec(ndim))
    call self%get_xvec(mol, cache, xvec)
+   if (allocated(cache%error)) then
+      call move_alloc(cache%error, error)
+      return
+   end if
 
    vrhs = xvec
    ainv = amat
@@ -396,11 +402,17 @@ subroutine solve(self, mol, error, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL, &
       allocate(dadr(3, mol%nat, ndim), dadL(3, 3, ndim), atrace(3, mol%nat))
       allocate(dxdr(3, mol%nat, ndim), dxdL(3, 3, ndim))
       call self%get_xvec_derivs(mol, cache, dxdr, dxdL)
+      if (allocated(cache%error)) then
+         call move_alloc(cache%error, error)
+         return
+      end if
+
       call self%get_coulomb_derivs(mol, cache, vrhs, dadr, dadL, atrace)
       if (allocated(cache%error)) then
          call move_alloc(cache%error, error)
          return
       end if
+
       do iat = 1, mol%nat
          dadr(:, iat, iat) = atrace(:, iat) + dadr(:, iat, iat)
       end do

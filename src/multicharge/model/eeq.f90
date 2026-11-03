@@ -127,7 +127,9 @@ subroutine update(self, mol, cache, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL)
 
    if (any(mol%periodic)) then
       ! Create WSC
-      call new_wignerseitz_cell(ptr%wsc, mol)
+      call new_wignerseitz_cell(ptr%wsc, mol, cache%error)
+      if (allocated(cache%error)) return
+
       call get_alpha(mol%lattice, ptr%alpha, mol%periodic)
    end if
 
@@ -249,7 +251,10 @@ subroutine add_model_hessian(self, mol, error, cache, adj, hessian)
    end do
    mol_wrapped = mol
    call wrap_to_central_cell(mol_wrapped%xyz, mol_wrapped%lattice, mol_wrapped%periodic)
-   call get_lattice_points(mol_wrapped%periodic, mol_wrapped%lattice, self%ncoord%cutoff, trans)
+   call get_lattice_points(mol_wrapped%periodic, mol_wrapped%lattice, self%ncoord%cutoff, &
+      & trans, error=error)
+   if (allocated(error)) return
+
    call self%ncoord%add_coordination_number_hessian(mol_wrapped, trans, dEdcn, hessian)
    call gemm(work, dcndr, hessian, transb="t", beta=1.0_wp)
 

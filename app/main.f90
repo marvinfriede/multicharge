@@ -119,10 +119,16 @@ program main
 
    mol_wrapped = mol
    call wrap_to_central_cell(mol_wrapped%xyz, mol_wrapped%lattice, mol_wrapped%periodic)
-   call get_lattice_points(mol_wrapped%periodic, mol_wrapped%lattice, model%ncoord%cutoff, trans)
+   call get_lattice_points(mol_wrapped%periodic, mol_wrapped%lattice, model%ncoord%cutoff, &
+      & trans, error=error)
+   if (allocated(error)) then
+      write(error_unit, "(a)") error%message
+      error stop
+   end if
+
    call model%ncoord%get_coordination_number(mol_wrapped, trans, cn, dcndr, dcndL)
    call model%local_charge(mol_wrapped, trans, qloc, dqlocdr, dqlocdL)
-   call model%solve(mol_wrapped, error, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL, &
+   call model%solve(mol, error, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL, &
       & energy, gradient, sigma, qvec, dqdr, dqdL)
 
    if (allocated(error)) then

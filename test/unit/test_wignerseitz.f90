@@ -14,14 +14,16 @@
 ! limitations under the License.
 
 module test_wignerseitz
-   use mctc_cutoff, only: get_lattice_points
+   use mctc_cutoff, only: get_lattice_points, cutoff_stat
    use mctc_env, only: wp
    use mctc_env_testing, only: new_unittest, unittest_type, error_type, check, &
       & test_failed
    use mctc_io_structure, only: structure_type, new
    use mctc_wignerseitz, only: wignerseitz_cell, new_wignerseitz_cell, &
-      & get_wignerseitz_weights
+      & get_wignerseitz_weights, wsc_stat
    use mstore, only: get_structure
+   use multicharge, only: mchrg_model_type, new_eeq2019_model, new_eeqbc2025_model, &
+      & get_charges
    implicit none
    private
 
@@ -49,7 +51,9 @@ subroutine collect_wignerseitz(testsuite)
       & new_unittest("wignerseitz-cell-3d", test_wsc_3d), &
       & new_unittest("wignerseitz-self-images", test_self_images), &
       & new_unittest("wignerseitz-robustness-1d-2d", test_wsc_robustness_1d_2d), &
-      & new_unittest("wignerseitz-65deg-counterexample", test_wsc_65deg_counterexample) &
+      & new_unittest("wignerseitz-65deg-counterexample", test_wsc_65deg_counterexample), &
+      & new_unittest("wignerseitz-3d-skewed-counterexample", test_wsc_3d_skewed_counterexample), &
+      & new_unittest("wignerseitz-resource-limits", test_wsc_resource_limits) &
       & ]
 
 end subroutine collect_wignerseitz
@@ -147,7 +151,7 @@ subroutine test_wsc_3d(error)
    call check(error, size(wsc%trans, 1), 3)
    if (allocated(error)) return
 
-   call check(error, size(wsc%trans, 2), 27)
+   call check(error, size(wsc%trans, 2), 105)
    if (allocated(error)) return
 
 end subroutine test_wsc_3d
@@ -528,5 +532,150 @@ subroutine test_wsc_65deg_counterexample(error)
    end if
 
 end subroutine test_wsc_65deg_counterexample
+
+subroutine test_wsc_3d_skewed_counterexample(error)
+   type(error_type), allocatable, intent(out) :: error
+
+   type(structure_type) :: mol
+   type(wignerseitz_cell) :: wsc
+   real(wp) :: lattice(3, 3), xyz(3, 2), rij(3), vec(3), d2_found, weights(16)
+   real(wp), parameter :: d2_expect = 6.5_wp
+   integer :: img
+
+   lattice(:, 1) = [5.0_wp, 0.0_wp, 0.0_wp]
+   lattice(:, 2) = [25.0_wp, 1.0_wp, 0.0_wp]
+   lattice(:, 3) = [0.0_wp, 0.0_wp, 5.0_wp]
+
+   xyz(:, 1) = 0.0_wp
+   xyz(:, 2) = 0.5_wp * lattice(:, 2)
+
+   call new(mol, [6, 8], xyz, lattice=lattice, periodic=[.true., .true., .true.])
+   call new_wignerseitz_cell(wsc, mol, error=error)
+   if (allocated(error)) return
+
+   call check(error, wsc%nimg(1, 2), 4)
+   if (allocated(error)) return
+   call check(error, wsc%nimg(2, 1), 4)
+   if (allocated(error)) return
+
+   rij = mol%xyz(:, 2) - mol%xyz(:, 1)
+   do img = 1, wsc%nimg(1, 2)
+      vec = rij - wsc%trans(:, wsc%tridx(img, 1, 2))
+      d2_found = sum(vec**2)
+      if (abs(d2_found - d2_expect) > 1.0e-12_wp) then
+         call test_failed(error, "3D skewed counterexample did not find d^2 = 6.5 bohr^2")
+         return
+      end if
+   end do
+
+   call get_wignerseitz_weights(wsc, 1, 2, rij, weights)
+   if (maxval(abs(weights(1:4) - 0.25_wp)) > 1.0e-12_wp) then
+      call test_failed(error, "3D skewed counterexample weights are not [0.25, 0.25, 0.25, 0.25]")
+      return
+   end if
+
+end subroutine test_wsc_3d_skewed_counterexample
+
+subroutine test_wsc_resource_limits(error)
+   type(error_type), allocatable, intent(out) :: error
+
+   type(structure_type) :: mol
+   type(wignerseitz_cell) :: wsc
+   type(error_type), allocatable :: call_err
+   class(mchrg_model_type), allocatable :: model_eeq, model_eeqbc
+   real(wp) :: lattice(3, 3), xyz(3, 2), qvec(2)
+   real(wp), allocatable :: trans(:, :)
+   integer :: stat
+
+   ! 1. 1D resource-limit regression (> 100,000 candidate periods)
+   lattice = 0.0_wp
+   lattice(:, 1) = [5.0_wp, 0.0_wp, 0.0_wp]
+   xyz(:, 1) = 0.0_wp
+   xyz(:, 2) = 1.0e5_wp * lattice(:, 1) + [1.2_wp, 0.0_wp, 0.0_wp]
+   call new(mol, [6, 8], xyz, lattice=lattice, periodic=[.true., .false., .false.])
+
+   call new_wignerseitz_cell(wsc, mol, error=call_err, stat=stat)
+   call check(error, stat, wsc_stat%resource_exhausted)
+   if (allocated(error)) return
+   if (.not. allocated(call_err) .or. allocated(wsc%trans)) then
+      call test_failed(error, "1D resource limit did not fail cleanly in new_wignerseitz_cell")
+      return
+   end if
+   deallocate(call_err)
+
+   call new_eeq2019_model(mol, model_eeq, error)
+   if (allocated(error)) return
+   call get_charges(model_eeq, mol, call_err, qvec)
+   if (.not. allocated(call_err)) then
+      call test_failed(error, "1D WSC resource limit was not propagated by EEQ get_charges")
+      return
+   end if
+   deallocate(call_err)
+
+   call new_eeqbc2025_model(mol, model_eeqbc, error)
+   if (allocated(error)) return
+   call get_charges(model_eeqbc, mol, call_err, qvec)
+   if (.not. allocated(call_err)) then
+      call test_failed(error, "1D WSC resource limit was not propagated by EEQBC get_charges")
+      return
+   end if
+   deallocate(call_err)
+
+   ! 2. 2D resource-limit regression (> 100,000 candidate translations)
+   lattice = 0.0_wp
+   lattice(:, 1) = [5.0_wp, 0.0_wp, 0.0_wp]
+   lattice(:, 2) = [0.0_wp, 5.0_wp, 0.0_wp]
+   xyz(:, 1) = 0.0_wp
+   xyz(:, 2) = 300.0_wp * lattice(:, 1) + 300.0_wp * lattice(:, 2) &
+      & + [1.2_wp, 1.3_wp, 0.0_wp]
+   call new(mol, [6, 8], xyz, lattice=lattice, periodic=[.true., .true., .false.])
+
+   call new_wignerseitz_cell(wsc, mol, error=call_err, stat=stat)
+   call check(error, stat, wsc_stat%resource_exhausted)
+   if (allocated(error)) return
+   if (.not. allocated(call_err) .or. allocated(wsc%trans)) then
+      call test_failed(error, "2D resource limit did not fail cleanly in new_wignerseitz_cell")
+      return
+   end if
+   deallocate(call_err)
+
+   call get_charges(model_eeq, mol, call_err, qvec)
+   if (.not. allocated(call_err)) then
+      call test_failed(error, "2D WSC resource limit was not propagated by EEQ get_charges")
+      return
+   end if
+   deallocate(call_err)
+
+   call get_charges(model_eeqbc, mol, call_err, qvec)
+   if (.not. allocated(call_err)) then
+      call test_failed(error, "2D WSC resource limit was not propagated by EEQBC get_charges")
+      return
+   end if
+   deallocate(call_err)
+
+   ! 3. Lattice point enumeration overflow (rep = [650, 650, 650]) and resource limit
+   lattice = 0.0_wp
+   lattice(1, 1) = 5.0_wp
+   lattice(2, 2) = 5.0_wp
+   lattice(3, 3) = 5.0_wp
+   call get_lattice_points(lattice, [650, 650, 650], .true., trans, error=call_err, stat=stat)
+   call check(error, stat, cutoff_stat%integer_overflow)
+   if (allocated(error)) return
+   if (.not. allocated(call_err) .or. allocated(trans)) then
+      call test_failed(error, "rep = [650, 650, 650] did not fail cleanly in get_lattice_points")
+      return
+   end if
+   deallocate(call_err)
+
+   call get_lattice_points(lattice, [200, 200, 200], .true., trans, error=call_err, stat=stat)
+   call check(error, stat, cutoff_stat%resource_exhausted)
+   if (allocated(error)) return
+   if (.not. allocated(call_err) .or. allocated(trans)) then
+      call test_failed(error, "rep = [200, 200, 200] did not fail cleanly in get_lattice_points")
+      return
+   end if
+   deallocate(call_err)
+
+end subroutine test_wsc_resource_limits
 
 end module test_wignerseitz

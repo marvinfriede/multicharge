@@ -188,6 +188,8 @@ subroutine new_eeqbc_model(self, mol, error, chi, rad, &
    call new_ncoord(self%ncoord, mol, cn_count%erf, error, &
       & cutoff=cutoff, kcn=cn_exp, rcov=rcov, cut=cn_max, &
       & norm_exp=self%norm_exp)
+   if (allocated(error)) return
+
    ! Electronegativity weighted coordination number for local charge
    call new_ncoord(self%ncoord_en, mol, cn_count%erf_en, error, &
       & cutoff=cutoff, kcn=cn_exp, rcov=rcov, en=en, cut=cn_max, &
@@ -242,10 +244,13 @@ subroutine update(self, mol, cache, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL)
    select case (count(mol%periodic))
    case (1, 2, 3)
       ! Create WSC in periodic subspace
-      call new_wignerseitz_cell(ptr%wsc, mol)
+      call new_wignerseitz_cell(ptr%wsc, mol, cache%error)
+      if (allocated(cache%error)) return
 
       ! Get full cmat sum over all WSC images (for get_xvec and xvec_derivs)
-      call self%get_cmat_pbc(mol, ptr%wsc, ptr%cmat)
+      call self%get_cmat_pbc(mol, ptr%wsc, ptr%cmat, cache%error)
+      if (allocated(cache%error)) return
+
       if (grad) then
          if (.not. allocated(ptr%dcdr)) then
             allocate(ptr%dcdr(3, mol%nat, mol%nat + 1))
@@ -253,7 +258,8 @@ subroutine update(self, mol, cache, cn, qloc, dcndr, dcndL, dqlocdr, dqlocdL)
          if (.not. allocated(ptr%dcdL)) then
             allocate(ptr%dcdL(3, 3, mol%nat + 1))
          end if
-         call self%get_dcmat_pbc(mol, ptr%wsc, ptr%dcdr, ptr%dcdL)
+         call self%get_dcmat_pbc(mol, ptr%wsc, ptr%dcdr, ptr%dcdL, cache%error)
+         if (allocated(cache%error)) return
       end if
    case default
       call self%get_cmat_0d(mol, ptr%cmat)
@@ -304,7 +310,9 @@ subroutine get_xvec(self, mol, cache, xvec)
 
    select case (count(mol%periodic))
    case (1, 2, 3)
-      call get_eeqbc_dir_trans(self, mol, ptr%wsc, dtrans)
+      call get_eeqbc_dir_trans(self, mol, ptr%wsc, dtrans, cache%error)
+      if (allocated(cache%error)) return
+
       !$omp parallel default(none) &
       !$omp shared(mol, self, ptr, xvec, dtrans) private(iat, izp, img, wsw) &
       !$omp private(capi, vec, rvdw, ctmp, xvec_local)
@@ -387,7 +395,9 @@ subroutine get_xvec_derivs(self, mol, cache, dxdr, dxdL)
 
    select case (count(mol%periodic))
    case (1, 2, 3)
-      call get_eeqbc_dir_trans(self, mol, ptr%wsc, dtrans)
+      call get_eeqbc_dir_trans(self, mol, ptr%wsc, dtrans, cache%error)
+      if (allocated(cache%error)) return
+
       !$omp parallel default(none) &
       !$omp shared(mol, self, ptr, dxdr, dxdL, dtrans) &
       !$omp private(iat, izp, jat, jzp, img, wsw) &
@@ -516,8 +526,12 @@ subroutine add_model_hessian(self, mol, error, cache, adj, hessian)
    periodic = count(mol%periodic) > 0
    select case (count(mol%periodic))
    case (1, 2, 3)
-      call get_eeqbc_dir_trans(self, mol, ptr%wsc, dtrans)
-      call get_lattice_points(mol_wrapped%periodic, mol_wrapped%lattice, self%ncoord%cutoff, cn_trans)
+      call get_eeqbc_dir_trans(self, mol, ptr%wsc, dtrans, error)
+      if (allocated(error)) return
+
+      call get_lattice_points(mol_wrapped%periodic, mol_wrapped%lattice, self%ncoord%cutoff, &
+         & cn_trans, error=error)
+      if (allocated(error)) return
    case default
       allocate(dtrans(3, 1), source=0.0_wp)
       allocate(cn_trans(3, 1), source=0.0_wp)
@@ -627,7 +641,7 @@ subroutine get_coulomb_matrix(self, mol, cache, amat)
 
    select case (count(mol%periodic))
    case (1, 2, 3)
-      call get_amat_pbc(self, mol, ptr%wsc, ptr%cn, ptr%qloc, ptr%cmat, amat)
+      call get_amat_pbc(self, mol, ptr%wsc, ptr%cn, ptr%qloc, ptr%cmat, amat, cache%error)
    case default
       call get_amat_0d(self, mol, ptr%cn, ptr%qloc, ptr%cmat, amat)
    end select
@@ -690,12 +704,13 @@ subroutine get_amat_0d(self, mol, cn, qloc, cmat, amat)
 
 end subroutine get_amat_0d
 
-subroutine get_amat_pbc(self, mol, wsc, cn, qloc, cmat, amat)
+subroutine get_amat_pbc(self, mol, wsc, cn, qloc, cmat, amat, error)
    class(eeqbc_model), intent(in) :: self
    type(structure_type), intent(in) :: mol
    type(wignerseitz_cell), intent(in) :: wsc
    real(wp), intent(in) :: cn(:), qloc(:), cmat(:, :)
    real(wp), intent(out) :: amat(:, :)
+   type(error_type), allocatable, intent(out), optional :: error
 
    integer :: iat, jat, izp, jzp, img
    real(wp) :: vec(3), r1, gam, dtmp, ctmp, capi, capj, radi, radj, norm_cn, rvdw, wsw
@@ -704,9 +719,11 @@ subroutine get_amat_pbc(self, mol, wsc, cn, qloc, cmat, amat)
    ! Thread-private array for reduction
    real(wp), allocatable :: amat_local(:, :)
 
-   call get_eeqbc_dir_trans(self, mol, wsc, dtrans)
-
    amat(:, :) = 0.0_wp
+   call get_eeqbc_dir_trans(self, mol, wsc, dtrans, error)
+   if (present(error)) then
+      if (allocated(error)) return
+   end if
 
    !$omp parallel default(none) &
    !$omp shared(amat, cmat, mol, cn, qloc, self, wsc, dtrans)  &
@@ -805,8 +822,8 @@ subroutine get_coulomb_derivs(self, mol, cache, qvec, dadr, dadL, atrace)
    select case (count(mol%periodic))
    case (1, 2, 3)
       call get_damat_pbc(self, mol, ptr%wsc, ptr%cn, &
-      & ptr%qloc, qvec, ptr%dcndr, ptr%dcndL, ptr%dqlocdr, &
-      & ptr%dqlocdL, ptr%cmat, ptr%dcdr, ptr%dcdL, dadr, dadL, atrace)
+         & ptr%qloc, qvec, ptr%dcndr, ptr%dcndL, ptr%dqlocdr, &
+         & ptr%dqlocdL, ptr%cmat, ptr%dcdr, ptr%dcdL, dadr, dadL, atrace, cache%error)
 
    case default
       call get_damat_0d(self, mol, ptr%cn, &
@@ -948,7 +965,7 @@ subroutine get_damat_0d(self, mol, cn, qloc, qvec, dcndr, dcndL, &
 end subroutine get_damat_0d
 
 subroutine get_damat_pbc(self, mol, wsc, cn, qloc, qvec, dcndr, dcndL, dqlocdr, &
-   & dqlocdL, cmat, dcdr, dcdL, dadr, dadL, atrace)
+   & dqlocdL, cmat, dcdr, dcdL, dadr, dadL, atrace, error)
    class(eeqbc_model), intent(in) :: self
    type(structure_type), intent(in) :: mol
    type(wignerseitz_cell), intent(in) :: wsc
@@ -965,6 +982,7 @@ subroutine get_damat_pbc(self, mol, wsc, cn, qloc, qvec, dcndr, dcndL, dqlocdr, 
    real(wp), intent(out) :: dadr(:, :, :)
    real(wp), intent(out) :: dadL(:, :, :)
    real(wp), intent(out) :: atrace(:, :)
+   type(error_type), allocatable, intent(out), optional :: error
 
    integer :: iat, jat, izp, jzp, img
    real(wp) :: vec(3), r2, gam, arg, dtmp, norm_cn, rvdw, wsw, dgam
@@ -976,13 +994,15 @@ subroutine get_damat_pbc(self, mol, wsc, cn, qloc, qvec, dcndr, dcndL, dqlocdr, 
    real(wp), allocatable :: atrace_local(:, :)
    real(wp), allocatable :: dadr_local(:, :, :), dadL_local(:, :, :)
 
-   call get_eeqbc_dir_trans(self, mol, wsc, dtrans)
-
-   allocate(dgamdr(3, mol%nat))
-
    atrace(:, :) = 0.0_wp
    dadr(:, :, :) = 0.0_wp
    dadL(:, :, :) = 0.0_wp
+   call get_eeqbc_dir_trans(self, mol, wsc, dtrans, error)
+   if (present(error)) then
+      if (allocated(error)) return
+   end if
+
+   allocate(dgamdr(3, mol%nat))
 
    !$omp parallel default(none) &
    !$omp shared(self, mol, cn, qloc, qvec, wsc, dadr, dadL, atrace) &
@@ -1222,11 +1242,12 @@ subroutine get_cmat_0d(self, mol, cmat)
 
 end subroutine get_cmat_0d
 
-subroutine get_cmat_3d(self, mol, wsc, cmat)
+subroutine get_cmat_3d(self, mol, wsc, cmat, error)
    class(eeqbc_model), intent(in) :: self
    type(structure_type), intent(in) :: mol
    type(wignerseitz_cell), intent(in) :: wsc
    real(wp), intent(out) :: cmat(:, :)
+   type(error_type), allocatable, intent(out), optional :: error
 
    integer :: iat, jat, izp, jzp, img
    real(wp) :: vec(3), rvdw, tmp, capi, capj, wsw
@@ -1235,9 +1256,11 @@ subroutine get_cmat_3d(self, mol, wsc, cmat)
    ! Thread-private array for reduction
    real(wp), allocatable :: cmat_local(:, :)
 
-   call get_eeqbc_dir_trans(self, mol, wsc, dtrans)
-
    cmat(:, :) = 0.0_wp
+   call get_eeqbc_dir_trans(self, mol, wsc, dtrans, error)
+   if (present(error)) then
+      if (allocated(error)) return
+   end if
 
    !$omp parallel default(none) &
    !$omp shared(cmat, mol, self, wsc, dtrans) &
@@ -1400,12 +1423,13 @@ subroutine get_dcmat_0d(self, mol, dcdr, dcdL)
 
 end subroutine get_dcmat_0d
 
-subroutine get_dcmat_3d(self, mol, wsc, dcdr, dcdL)
+subroutine get_dcmat_3d(self, mol, wsc, dcdr, dcdL, error)
    class(eeqbc_model), intent(in) :: self
    type(structure_type), intent(in) :: mol
    type(wignerseitz_cell), intent(in) :: wsc
    real(wp), intent(out) :: dcdr(:, :, :)
    real(wp), intent(out) :: dcdL(:, :, :)
+   type(error_type), allocatable, intent(out), optional :: error
 
    integer :: iat, jat, izp, jzp, img
    real(wp) :: vec(3), r2, rvdw, dtmp, arg, dG(3), dS(3, 3), capi, capj, wsw
@@ -1414,10 +1438,12 @@ subroutine get_dcmat_3d(self, mol, wsc, dcdr, dcdL)
    ! Thread-private arrays for reduction
    real(wp), allocatable :: dcdr_local(:, :, :), dcdL_local(:, :, :)
 
-   call get_eeqbc_dir_trans(self, mol, wsc, dtrans)
-
    dcdr(:, :, :) = 0.0_wp
    dcdL(:, :, :) = 0.0_wp
+   call get_eeqbc_dir_trans(self, mol, wsc, dtrans, error)
+   if (present(error)) then
+      if (allocated(error)) return
+   end if
 
    !$omp parallel default(none) &
    !$omp shared(dcdr, dcdL, mol, self, dtrans, wsc) &
@@ -1493,7 +1519,7 @@ subroutine get_dcpair_dir(kbc, rij, trans, rvdw, capi, capj, dgpair, dspair)
 end subroutine get_dcpair_dir
 
 !> Generate direct-space lattice translations for EEQBC capacitance and Coulomb sums
-subroutine get_eeqbc_dir_trans(self, mol, wsc, dtrans)
+subroutine get_eeqbc_dir_trans(self, mol, wsc, dtrans, error)
    !> Bond capacitor electronegativity equilibration model
    class(eeqbc_model), intent(in) :: self
    !> Molecular structure data
@@ -1502,6 +1528,8 @@ subroutine get_eeqbc_dir_trans(self, mol, wsc, dtrans)
    type(wignerseitz_cell), intent(in) :: wsc
    !> Direct-space lattice translation vectors
    real(wp), allocatable, intent(out) :: dtrans(:, :)
+   !> Optional error handling
+   type(error_type), allocatable, intent(out), optional :: error
 
    integer :: ndim, iat, jat, img
    real(wp) :: rcut, rvdw_max, r_disp, kbc_eff, vec(3)
@@ -1528,9 +1556,9 @@ subroutine get_eeqbc_dir_trans(self, mol, wsc, dtrans)
       end do
       kbc_eff = max(self%kbc, 1.0e-3_wp)
       rcut = max(self%ncoord%cutoff, rvdw_max * (1.0_wp + erf_tail / kbc_eff) + r_disp)
-      call get_lattice_points(mol%periodic, mol%lattice, rcut, dtrans)
+      call get_lattice_points(mol%periodic, mol%lattice, rcut, dtrans, error=error)
    case (3)
-      call get_lattice_points(mol%periodic, mol%lattice, self%ncoord%cutoff, dtrans)
+      call get_lattice_points(mol%periodic, mol%lattice, self%ncoord%cutoff, dtrans, error=error)
    case default
       allocate(dtrans(3, 1), source=0.0_wp)
    end select
