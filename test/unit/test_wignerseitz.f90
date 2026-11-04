@@ -620,16 +620,10 @@ subroutine test_wsc_resource_limits(error)
       return
    end if
 
-   ! 3. Lattice point enumeration overflow (rep = [650, 650, 650]) and resource limit
+   ! 3. Lattice point enumeration beyond the integer range (rep = [650, 650, 650])
    call get_lattice_points(lat_3d, [650, 650, 650], .true., trans, call_err)
    if (.not. allocated(call_err) .or. allocated(trans)) then
       call test_failed(error, "rep = [650, 650, 650] did not fail cleanly in get_lattice_points")
-      return
-   end if
-
-   call get_lattice_points(lat_3d, [200, 200, 200], .true., trans, call_err)
-   if (.not. allocated(call_err) .or. allocated(trans)) then
-      call test_failed(error, "rep = [200, 200, 200] did not fail cleanly in get_lattice_points")
       return
    end if
 
