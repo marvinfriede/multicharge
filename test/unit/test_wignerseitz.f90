@@ -64,7 +64,7 @@ subroutine test_latticepoints_0d(error)
    type(error_type), allocatable, intent(out) :: error
 
    type(structure_type) :: mol
-   real(wp), allocatable :: trans(:, :), trans_legacy(:, :)
+   real(wp), allocatable :: trans(:, :)
    real(wp), parameter :: cutoff = 25.0_wp
 
    call get_structure(mol, "MB16-43", "01")
@@ -72,15 +72,10 @@ subroutine test_latticepoints_0d(error)
    call get_lattice_points(mol%periodic, mol%lattice, thr2, trans, error)
    if (allocated(error)) return
 
-   call get_lattice_points(mol%periodic, mol%lattice, thr2, trans_legacy)
-
    call check(error, size(trans, 1), 3)
    if (allocated(error)) return
 
    call check(error, size(trans, 2), 1)
-   if (allocated(error)) return
-
-   call check(error, size(trans_legacy, 2), 1)
    if (allocated(error)) return
 
    call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans, error)
@@ -100,7 +95,7 @@ subroutine test_latticepoints_3d(error)
    type(error_type), allocatable, intent(out) :: error
 
    type(structure_type) :: mol
-   real(wp), allocatable :: trans(:, :), trans_legacy(:, :)
+   real(wp), allocatable :: trans(:, :)
    real(wp), parameter :: cutoff = 25.0_wp
 
    call get_structure(mol, "ICE10", "ii")
@@ -108,18 +103,11 @@ subroutine test_latticepoints_3d(error)
    call get_lattice_points(mol%periodic, mol%lattice, thr2, trans, error)
    if (allocated(error)) return
 
-   call get_lattice_points(mol%periodic, mol%lattice, thr2, trans_legacy)
-
    call check(error, size(trans, 1), 3)
    if (allocated(error)) return
 
    call check(error, size(trans, 2), 27)
    if (allocated(error)) return
-
-   if (any(abs(trans - trans_legacy) > thr)) then
-      call test_failed(error, "Legacy and checked get_lattice_points differ")
-      return
-   end if
 
    call get_lattice_points(mol%periodic, mol%lattice, cutoff, trans, error)
    if (allocated(error)) return
@@ -138,22 +126,17 @@ subroutine test_wsc_0d(error)
    type(error_type), allocatable, intent(out) :: error
 
    type(structure_type) :: mol
-   type(wignerseitz_cell) :: wsc, wsc_legacy
+   type(wignerseitz_cell) :: wsc
 
    call get_structure(mol, "MB16-43", "02")
 
    call new_wignerseitz_cell(wsc, mol, error)
    if (allocated(error)) return
 
-   call new_wignerseitz_cell(wsc_legacy, mol)
-
    call check(error, size(wsc%trans, 1), 3)
    if (allocated(error)) return
 
    call check(error, size(wsc%trans, 2), 1)
-   if (allocated(error)) return
-
-   call check(error, size(wsc_legacy%trans, 2), 1)
    if (allocated(error)) return
 
 end subroutine test_wsc_0d
@@ -164,27 +147,18 @@ subroutine test_wsc_3d(error)
    type(error_type), allocatable, intent(out) :: error
 
    type(structure_type) :: mol
-   type(wignerseitz_cell) :: wsc, wsc_legacy
+   type(wignerseitz_cell) :: wsc
 
    call get_structure(mol, "X23", "pyrazole")
 
    call new_wignerseitz_cell(wsc, mol, error)
    if (allocated(error)) return
 
-   call new_wignerseitz_cell(wsc_legacy, mol)
-
    call check(error, size(wsc%trans, 1), 3)
    if (allocated(error)) return
 
    call check(error, size(wsc%trans, 2), 105)
    if (allocated(error)) return
-
-   if (any(abs(wsc%trans - wsc_legacy%trans) > thr) .or. &
-      & any(wsc%nimg /= wsc_legacy%nimg) .or. &
-      & any(wsc%tridx /= wsc_legacy%tridx)) then
-      call test_failed(error, "Legacy and checked new_wignerseitz_cell differ")
-      return
-   end if
 
 end subroutine test_wsc_3d
 
