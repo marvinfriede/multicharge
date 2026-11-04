@@ -24,14 +24,13 @@
 module multicharge_model_type
 
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
-   use mctc_cutoff, only: get_lattice_points
+   use mctc_cutoff, only: get_lattice_points, get_periodic_axes
    use mctc_env, only: error_type, fatal_error, wp, ik => IK
    use mctc_io, only: structure_type
    use mctc_io_constants, only: pi
    use mctc_io_math, only: crossprod, matinv_3x3
    use mctc_ncoord, only: ncoord_type
    use multicharge_blas, only: gemv, symv, gemm
-   use multicharge_ewald, only: get_periodic_axes
    use multicharge_lapack, only: sytrf, sytrs, sytri
    use multicharge_model_cache, only: model_cache, cache_container
    implicit none

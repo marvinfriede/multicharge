@@ -25,7 +25,7 @@
 !> This implementation uses their 1D and 2D Ewald formulations by direct lattice
 !> summation rather than NFFT acceleration.
 module multicharge_ewald
-   use mctc_cutoff, only: get_lattice_points
+   use mctc_cutoff, only: get_lattice_points, get_periodic_axes
    use mctc_env, only: error_type, fatal_error, i8, wp
    use mctc_io_constants, only: pi
    use mctc_io_math, only: crossprod, matdet_3x3, matinv_3x3
@@ -33,7 +33,6 @@ module multicharge_ewald
    private
 
    public :: get_alpha, get_alpha_2d, erfc_exp_2d, reduce_basis_2d
-   public :: get_periodic_axes
    public :: get_ewald_dir_trans_3d, get_ewald_rec_trans_3d
    public :: get_ewald_dir_trans_2d, get_ewald_rec_trans_2d
    public :: get_ewald_dir_trans_1d, get_ewald_rec_trans_1d
@@ -91,28 +90,6 @@ module multicharge_ewald
    end interface
 
 contains
-
-!> Extract the number and indices of active periodic axes
-pure subroutine get_periodic_axes(periodic, ndim, p_axes)
-   !> Periodicity mask
-   logical, intent(in) :: periodic(:)
-   !> Number of periodic dimensions (0, 1, 2, or 3)
-   integer, intent(out) :: ndim
-   !> Indices of active periodic axes in 1..ndim
-   integer, intent(out) :: p_axes(3)
-
-   integer :: i
-
-   ndim = 0
-   p_axes = 0
-   do i = 1, min(3, size(periodic))
-      if (periodic(i)) then
-         ndim = ndim + 1
-         p_axes(ndim) = i
-      end if
-   end do
-end subroutine get_periodic_axes
-
 
 subroutine get_alpha(lattice, alpha, periodic)
    !> Lattice vectors (columns)

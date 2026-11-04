@@ -22,7 +22,7 @@
 !> and S. Grimme, *J. Chem. Phys.*, **2019**, 150, 154122.
 !> DOI: [10.1063/1.5090222](https://dx.doi.org/10.1063/1.5090222)
 module multicharge_model_eeq
-   use mctc_cutoff, only: get_lattice_points, wrap_to_central_cell
+   use mctc_cutoff, only: get_lattice_points, get_periodic_axes, wrap_to_central_cell
    use mctc_env, only: error_type, fatal_error, wp
    use mctc_io, only: structure_type
    use mctc_io_constants, only: pi
@@ -30,7 +30,7 @@ module multicharge_model_eeq
    use mctc_ncoord, only: new_ncoord, cn_count
    use mctc_wignerseitz, only: wignerseitz_cell, new_wignerseitz_cell
    use multicharge_blas, only: gemm
-   use multicharge_ewald, only: get_alpha, erfc_exp_2d, get_periodic_axes, &
+   use multicharge_ewald, only: get_alpha, erfc_exp_2d, &
       & get_ewald_dir_trans_3d, get_ewald_rec_trans_3d, &
       & get_ewald_dir_trans_2d, get_ewald_rec_trans_2d, &
       & get_ewald_dir_trans_1d, get_ewald_rec_trans_1d, &
