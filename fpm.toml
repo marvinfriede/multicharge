@@ -10,7 +10,7 @@ link = ["lapack", "blas"]
 
 [dependencies]
 mctc-lib.git = "https://github.com/grimme-lab/mctc-lib.git"
-mctc-lib.rev = "55e70592e982ffbceae7a23855d3058223230322"
+mctc-lib.rev = "dccfd4ceaa17a2e4db377994490a115270f1d900"
 
 [dev-dependencies]
 mstore.git = "https://github.com/grimme-lab/mstore.git"
